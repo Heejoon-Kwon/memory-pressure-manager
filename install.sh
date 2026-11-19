@@ -21,7 +21,6 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory="$escaped_root"
 ExecStart=:"$escaped_root/.venv/bin/python" "$escaped_root/probe.py" --config "$escaped_root/config.yml"
 Restart=on-failure
 RestartSec=5
