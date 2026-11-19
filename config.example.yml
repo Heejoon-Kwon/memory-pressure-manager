@@ -1,0 +1,11 @@
+watch:
+  interval_seconds: 5
+  critical_available_percent: 8
+  consecutive_samples: 3
+  verification_seconds: 25
+  cooldown_seconds: 90
+  systemd_oom_preference: true
+openai:
+  api_key: ""
+  model: ""
+  monthly_budget_usd: 0
