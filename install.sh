@@ -32,6 +32,4 @@ UNIT
 systemctl --user daemon-reload
 systemctl --user enable probe.service
 systemctl --user restart probe.service
-if command -v gnome-extensions >/dev/null; then
-    gnome-extensions enable probe@local || printf '%s\n' 'GNOME 세션에 다시 로그인한 뒤 gnome-extensions enable probe@local 을 실행하세요.'
-fi
+"$root/panel.sh"

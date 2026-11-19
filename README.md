@@ -10,6 +10,8 @@ cd probe
 
 Python venv, GTK 3용 Python GI, GNOME 사용자 세션이 필요합니다. 설치 스크립트는 설정, 사용자 서비스, 상단 바 확장을 설치합니다. GNOME에서 확장을 찾지 못하면 작업을 저장하고 로그아웃한 뒤 다시 로그인해 `gnome-extensions enable probe@local`을 실행하세요. 기존 RAM Lite와 RAM Guard 표시를 쓰고 있다면 각각 `gnome-extensions disable jarvis-ram-lite@local`과 `gnome-extensions disable ram-guard@local`로 끌 수 있습니다.
 
+서비스가 실행 중인데 상단 바에 표시가 없으면 Ubuntu 화면에서 연 터미널에서 `./panel.sh`를 실행하세요. 이 명령은 Shell의 확장 활성화 상태를 확인하고, 처음 설치한 확장을 현재 세션이 아직 찾지 못하면 다음 로그인에 활성화되도록 등록합니다. GNOME 상단 바와 별개로 `/usr/bin/python3 window.py`로 관리 창을 열 수 있습니다.
+
 상단 바의 RAM·비용을 누르고 **메모리 우선순위 열기**를 선택하세요.
 
 | 앱 설정 | 동작 |
