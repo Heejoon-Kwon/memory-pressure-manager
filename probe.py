@@ -21,6 +21,7 @@ from agents import (APP_NAMES, MIB, AnalysisAgent, OOMPreference, ResponseAgent,
                     WatchAgent, get_process, priority)
 from budget import Budget, BudgetExceeded
 from model_pricing import rates_for
+from history import initialize, record
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -165,6 +166,8 @@ class Probe:
         if not (2 <= self.interval <= 60 and 3 <= self.threshold <= 20 and 2 <= confirm <= 10
                 and self.interval <= self.verify_seconds <= 120 and self.cooldown >= 60):
             raise ValueError('watch 설정 범위를 확인하세요')
+        self.database = database
+        initialize(database)
         self.watch = WatchAgent()
         self.analysis = AnalysisAgent(self.threshold, confirm)
         self.protection = OOMPreference() if cfg.get('systemd_oom_preference', True) else None
@@ -174,6 +177,22 @@ class Probe:
         self.advisor = Advisor(ai, self.budget)
         self.stop = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1)
+
+    def event(self, kind, details):
+        try:
+            record(self.database, kind, details)
+        except (sqlite3.Error, OSError):
+            LOG.warning("대응 이력을 저장하지 못했습니다")
+
+    def ask_advisor(self, scenario, telemetry, candidates):
+        self.event("ai_request", {"scenario": scenario, "memory": telemetry, "candidates": candidates, "model": self.advisor.model})
+        try:
+            choice = self.advisor.advise(telemetry, candidates)
+        except Exception as exc:
+            self.event("ai_error", {"scenario": scenario, "error": type(exc).__name__})
+            raise
+        self.event("ai_proposal", {"scenario": scenario, "app": choice, "model": self.advisor.model})
+        return choice
 
     def run(self):
         previous = None
@@ -214,10 +233,12 @@ class Probe:
                 key = trial['scenario']
                 if recovery_verified(trial['before'], sample, self.threshold, exited):
                     self.skills.save(key, trial['app'])
+                    self.event('skill_saved', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
                     summary = '가용 메모리 회복 확인 · 대응 기록 저장'
                     notify(summary)
                 else:
                     self.skills.discard(key)
+                    self.event('recovery_failed', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
                     unsuccessful_apps.add(trial['app'])
                     summary = '메모리 회복 미확인 · 저장된 대응 해제'
                     used_advice = False
@@ -237,6 +258,7 @@ class Probe:
                     candidates = [a for a in candidates if priority(a.key, settings) == best_priority]
                     scenario = scenario_for(sample, previous, candidates)
                     app = self.skills.get(scenario, candidates)
+                    source = 'skill' if app else None
                     declined = scenario in declined_scenarios
                     if not app and advice and advice[1].done():
                         asked_scenario, future = advice
@@ -248,6 +270,8 @@ class Probe:
                                 if declined:
                                     declined_scenarios.add(scenario)
                                 app = next((a for a in candidates if a.key == choice), None)
+                                if app:
+                                    source = 'ai'
                         except BudgetExceeded:
                             LOG.info('월 예산으로 API 분석 차단')
                         except Exception as exc:
@@ -255,10 +279,11 @@ class Probe:
                     if not app and not declined and not advice and not used_advice and self.advisor.enabled:
                         used_advice = True
                         payload = [{'id': a.key, 'rss_mib': round(a.rss / MIB)} for a in candidates]
-                        advice = (scenario, self.executor.submit(self.advisor.advise, snapshot(sample), payload))
+                        advice = (scenario, self.executor.submit(self.ask_advisor, scenario, snapshot(sample), payload))
                         summary = '메모리 압박 분석 중'
                     elif app or (not advice and not declined):
                         app = app or candidates[0]
+                        source = source or 'local'
                         # Check the policy again immediately before signaling.
                         current = overrides()
                         fresh = [a for a in ResponseAgent.candidates(apps, current)
@@ -269,13 +294,15 @@ class Probe:
                                 ResponseAgent.close(app, current)
                             except (ValueError, OSError, psutil.Error) as exc:
                                 self.skills.discard(scenario)
+                                self.event('action_failed', {'scenario': scenario, 'app': app.key, 'source': source, 'error': type(exc).__name__})
                                 unsuccessful_apps.add(app.key)
                                 LOG.info('앱 종료 요청 보류 (%s)', type(exc).__name__)
                             else:
+                                self.event('action_requested', {'scenario': scenario, 'app': app.key, 'source': source})
                                 summary = app.name + ' 종료 요청 · 메모리 회복 확인 중'
                                 notify(summary)
                                 trial = {'scenario': scenario, 'app': app.key, 'process': app.leaders[0],
-                                         'before': sample, 'verify_at': now + self.verify_seconds}
+                                         'before': sample, 'source': source, 'verify_at': now + self.verify_seconds}
                     elif declined:
                         next_action = now + self.cooldown
                         summary = '현재 대응 후보의 종료 보류'

@@ -2,6 +2,8 @@
 """GTK view and local priorities editor. Uses Ubuntu's GTK instead of the venv."""
 import json
 import os
+import sqlite3
+from datetime import datetime
 import tempfile
 import time
 from pathlib import Path
@@ -10,6 +12,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
+from history import read_history
 
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
 RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME')
@@ -26,6 +29,8 @@ row { border-bottom: 1px solid #252525; }
 combobox button { color: #fff; background: #171717; background-image: none;
  border: 1px solid #404040; box-shadow: none; border-radius: 7px; padding: 5px 8px; }
 combobox button:hover { background: #292929; }
+.history-button { color: #fff; background: #171717; background-image: none; border: 1px solid #555; border-radius: 9px; padding: 10px; box-shadow: none; }
+.history-button:hover { background: #292929; }
 '''
 
 
@@ -55,6 +60,109 @@ def update_priority(key, value):
         os.replace(tmp, path)
     finally:
         Path(tmp).unlink(missing_ok=True)
+
+
+APP_NAMES = {'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
+             'chrome': 'Google Chrome', 'chromium': 'Chromium', 'firefox': 'Firefox',
+             'slack': 'Slack', 'discord': 'Discord', 'edge': 'Microsoft Edge',
+             'codium': 'VSCodium', 'pycharm': 'PyCharm', 'webstorm': 'WebStorm'}
+
+
+def app_name(key):
+    return APP_NAMES.get(key, key or '없음')
+
+
+def scenario_text(value):
+    try:
+        pressure, swap, candidates = json.loads(value)
+        pressure_text = {'stall': '메모리 압박', 'low-available': '가용 메모리 부족',
+                         'psi-unavailable': '압박 지표 확인 불가'}.get(pressure, pressure)
+        return f"{pressure_text} · 스왑 I/O {'있음' if swap else '없음'} · 후보 {', '.join(app_name(x) for x in candidates)}"
+    except (ValueError, TypeError):
+        return '상황 정보 없음'
+
+
+def event_text(kind, details):
+    app = app_name(details.get('app'))
+    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단'}.get(details.get('source'), '')
+    titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
+              'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
+              'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패'}
+    lines = []
+    if kind == 'ai_request':
+        memory = details.get('memory', {})
+        lines.append(f"모델 {details.get('model', '')} · 가용 {memory.get('available_mib', '?')} MiB · 스왑 {memory.get('swap_used_mib', '?')} MiB")
+        lines.append('후보: ' + ', '.join(f"{app_name(x.get('id'))} ({x.get('rss_mib', '?')} MiB)" for x in details.get('candidates', [])))
+    elif kind == 'ai_proposal':
+        lines.append('제안: ' + ('종료 보류' if details.get('app') == 'none' else app))
+    elif kind == 'ai_error':
+        lines.append('오류 유형: ' + details.get('error', '알 수 없음'))
+    else:
+        lines.append(f"대상: {app}" + (f" · 판단: {source}" if source else ''))
+        if 'before_mib' in details:
+            lines.append(f"가용 메모리: {details['before_mib']} → {details['after_mib']} MiB")
+        if 'error' in details:
+            lines.append('오류 유형: ' + details['error'])
+    if details.get('scenario'):
+        lines.append(scenario_text(details['scenario']))
+    return titles.get(kind, kind), '\n'.join(lines)
+
+
+class HistoryWindow(Gtk.Window):
+    def __init__(self, parent):
+        super().__init__(title='Probe · 대응 기록', transient_for=parent)
+        self.set_default_size(650, 650)
+        self.set_border_width(22)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.add(root)
+        root.pack_start(label('PROBE', 'eyebrow'), False, False, 0)
+        root.pack_start(label('AI 제안과 대응 기록', 'title'), False, False, 0)
+        note = label('기록은 이 기기에만 저장됩니다. 최근 2,000건까지 보관하고 최신 200건을 표시합니다.', 'muted')
+        note.set_line_wrap(True)
+        root.pack_start(note, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        scroll.add(self.content)
+        root.pack_start(scroll, True, True, 0)
+        refresh = Gtk.Button(label='새로고침')
+        refresh.get_style_context().add_class('history-button')
+        refresh.connect('clicked', lambda *_: self.refresh())
+        root.pack_start(refresh, False, False, 0)
+        self.refresh()
+
+    def card(self, title, body):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        box.get_style_context().add_class('frame')
+        box.pack_start(label(title), False, False, 0)
+        text = label(body, 'muted')
+        text.set_line_wrap(True)
+        text.set_selectable(True)
+        box.pack_start(text, False, False, 0)
+        self.content.pack_start(box, False, False, 0)
+
+    def refresh(self):
+        for child in self.content.get_children():
+            self.content.remove(child)
+        try:
+            skills, events = read_history(STATE / 'probe.sqlite3')
+            self.content.pack_start(label(f'현재 저장된 스킬 · {len(skills)}개', 'eyebrow'), False, False, 0)
+            if not skills:
+                self.card('저장된 스킬 없음', '대응 후 메모리 회복이 확인되면 저장됩니다.')
+            for scenario, app in skills:
+                self.card(app_name(app) + ' 종료 요청', scenario_text(scenario))
+            self.content.pack_start(label('최근 활동', 'eyebrow'), False, False, 0)
+            if not events:
+                self.card('아직 기록이 없습니다', '이 업데이트 이후 발생하는 AI 제안과 대응부터 기록됩니다.')
+            for timestamp, kind, raw in events:
+                try:
+                    title, body = event_text(kind, json.loads(raw))
+                    when = datetime.fromtimestamp(timestamp).strftime('%Y.%m.%d %H:%M:%S')
+                    self.card(f'{title}  ·  {when}', body)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+        except (sqlite3.Error, OSError):
+            self.card('기록을 불러올 수 없습니다', 'Probe가 실행 중인지 확인한 뒤 다시 시도하세요.')
+        self.content.show_all()
 
 
 class Window(Gtk.Window):
@@ -90,9 +198,26 @@ class Window(Gtk.Window):
         caption = label('자동 종료 요청은 저장하지 않은 작업을 잃게 할 수 있습니다.', 'muted')
         caption.set_line_wrap(True)
         root.pack_start(caption, False, False, 0)
+        history_button = Gtk.Button(label='AI 제안 · 스킬 · 대응 기록 보기')
+        history_button.get_style_context().add_class('history-button')
+        history_button.connect('clicked', self.show_history)
+        root.pack_start(history_button, False, False, 0)
+        self.history_window = None
         self.entries = {}
         self.render()
         GLib.timeout_add_seconds(3, self.render)
+
+    def show_history(self, *_):
+        if self.history_window is None:
+            self.history_window = HistoryWindow(self)
+            self.history_window.connect('destroy', self.history_closed)
+            self.history_window.show_all()
+        else:
+            self.history_window.refresh()
+            self.history_window.present()
+
+    def history_closed(self, *_):
+        self.history_window = None
 
     def changed(self, combo, key):
         try:

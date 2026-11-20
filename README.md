@@ -32,6 +32,8 @@ Probe는 `MemAvailable`, PSI와 스왑 I/O로 압박을 평가합니다. 높은 
 
 문제 유형은 PSI 구간, 최근 스왑 I/O 여부, 같은 우선순위 후보의 조합으로 구분합니다. 해당 유형에 저장된 대응이 있고 여전히 허용된 대상이면 API를 건너뜁니다. 앱 종료와 가용 메모리 개선을 함께 확인한 경우에만 로컬 SQLite에 대응을 저장합니다. 회복하지 못했으면 저장된 대응을 제거하고, 압박이 지속되고 다른 적격 앱이 있을 때 다시 판단합니다. 패널 비용은 이번 달의 로컬 추정치입니다.
 
+우선순위 창 맨 아래의 **AI 제안 · 스킬 · 대응 기록 보기**에서 현재 스킬과 AI 요청·제안, 대응 및 검증 결과를 확인합니다. 요청 내용은 시스템 메모리 지표와 후보 앱 정보이며 API 키는 기록하지 않습니다. 기록은 로컬 SQLite에 최대 2,000건 보관하고 창에는 최신 200건을 표시합니다. 기존 버전에서 발생한 활동 이력은 소급 복원할 수 없지만 기존 스킬은 표시됩니다.
+
 서비스 확인은 `systemctl --user status probe.service`, 실행 로그는 `journalctl --user -u probe.service -n 30`, 중지는 `systemctl --user stop probe.service`입니다. 이후 로그인에서도 시작하지 않으려면 `systemctl --user disable --now probe.service`를 실행하세요.
 
 근거 문서 [Linux 메모리 PSI](https://docs.kernel.org/accounting/psi.html), [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html), [systemd 자원 제어](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html), [systemd-oomd](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.service.html).

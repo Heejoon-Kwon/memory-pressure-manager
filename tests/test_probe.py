@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from agents import GIB, MIB, AnalysisAgent, Process, ResponseAgent, Sample, group_apps
 from budget import Budget, BudgetExceeded
+from history import initialize, record, read_history
 from probe import Advisor, Skills, recovery_verified, scenario_for
 
 
@@ -17,6 +18,38 @@ def process(pid, executable, rss=200, *, parent=1, args=()):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_history_preserves_existing_skills_and_records_advice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'probe.db'
+            skills = Skills(db)
+            skills.save('["low-available", false, ["chrome"]]', 'chrome')
+            self.assertEqual(len(read_history(db)[0]), 1)
+            self.assertEqual(read_history(db)[1], [])
+            initialize(db)
+            record(db, 'ai_proposal', {'app': 'chrome'})
+            record(db, 'action_requested', {'app': 'chrome', 'source': 'skill'})
+            current, events = read_history(db)
+            self.assertEqual(current[0][1], 'chrome')
+            self.assertEqual([event[1] for event in events], ['action_requested', 'ai_proposal'])
+            self.assertNotIn('api_key', str(events))
+
+    def test_advice_records_success_and_error_without_credentials(self):
+        from probe import Probe
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'probe.db'
+            guard = Probe({'openai': {'api_key': 'private-key'}}, db)
+            try:
+                with patch.object(guard.advisor, 'advise', return_value='chrome'):
+                    self.assertEqual(guard.ask_advisor('scenario', {}, [{'id': 'chrome'}]), 'chrome')
+                with patch.object(guard.advisor, 'advise', side_effect=RuntimeError('private-key')):
+                    with self.assertRaises(RuntimeError):
+                        guard.ask_advisor('scenario', {}, [{'id': 'chrome'}])
+                events = read_history(db)[1]
+                self.assertEqual([e[1] for e in events], ['ai_error', 'ai_request', 'ai_proposal', 'ai_request'])
+                self.assertNotIn('private-key', str(events))
+            finally:
+                guard.executor.shutdown()
+
     def test_advisor_reserves_budget_and_records_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:
             budget = Budget(Path(tmp) / 'probe.db', 1000000)
