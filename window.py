@@ -17,7 +17,7 @@ RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HO
 OPTIONS = ('보호', '먼저 닫기', '다음에 닫기', '마지막에 닫기', '유지')
 CSS = b'''
 window { background: #000; color: #fff; }
-.title { font-size: 26px; font-weight: 700; }
+.title { font-size: 22px; font-weight: 700; }
 .eyebrow { font-size: 12px; font-weight: 700; color: #b0b0b0; }
 .muted { color: #bcbcbc; }
 .frame { background: #111; border: 1px solid #303030; border-radius: 12px; padding: 14px; }
@@ -59,14 +59,14 @@ def update_priority(key, value):
 
 class Window(Gtk.Window):
     def __init__(self):
-        super().__init__(title='Probe · 메모리 관리')
-        self.set_default_size(590, 470)
+        super().__init__(title='Probe')
+        self.set_default_size(650, 620)
         self.set_border_width(22)
         self.connect('destroy', Gtk.main_quit)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self.add(root)
         root.pack_start(label('PROBE', 'eyebrow'), False, False, 0)
-        root.pack_start(label('메모리 관리', 'title'), False, False, 0)
+        root.pack_start(label('앱 보호와 종료 순서', 'title'), False, False, 0)
         summary = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         summary.get_style_context().add_class('frame')
         self.metrics = label()
@@ -75,12 +75,19 @@ class Window(Gtk.Window):
         summary.pack_start(self.metrics, False, False, 0)
         summary.pack_start(self.note, False, False, 0)
         root.pack_start(summary, False, False, 0)
-        root.pack_start(label('실행 중인 앱', 'eyebrow'), False, False, 0)
+        guide = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        guide.get_style_context().add_class('frame')
+        for text in ('보호  ·  자동 종료 대상에서 제외하고 시스템 보호를 시도합니다.',
+                     '유지  ·  Probe가 자동으로 종료하지 않습니다.',
+                     '먼저 / 다음 / 마지막에 닫기  ·  메모리가 위험할 때 이 순서대로 종료를 요청합니다.'):
+            item = label(text, 'muted');item.set_line_wrap(True);guide.pack_start(item, False, False, 0)
+        root.pack_start(guide, False, False, 0)
+        root.pack_start(label('메모리를 사용하는 앱', 'eyebrow'), False, False, 0)
         self.rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         scroll = Gtk.ScrolledWindow()
         scroll.add(self.rows)
         root.pack_start(scroll, True, True, 0)
-        caption = label('‘닫기’를 지정한 앱은 메모리 부족 시 자동으로 종료 요청을 받습니다.', 'muted')
+        caption = label('자동 종료 요청은 저장하지 않은 작업을 잃게 할 수 있습니다.', 'muted')
         caption.set_line_wrap(True)
         root.pack_start(caption, False, False, 0)
         self.entries = {}

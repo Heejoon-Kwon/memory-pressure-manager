@@ -15,18 +15,36 @@ export default class ProbeExtension extends Extension {
         const manage = new PopupMenu.PopupMenuItem('메모리 우선순위 열기');
         manage.connect('activate', () => {
             try {
-                Gio.Subprocess.new(['/usr/bin/python3', this.path + '/window.py'], Gio.SubprocessFlags.NONE);
+                this.window = Gio.Subprocess.new(['/usr/bin/python3', this.path + '/window.py'], Gio.SubprocessFlags.NONE);
             } catch (e) {
                 Main.notify('Probe', 'GTK 창을 열 수 없습니다.');
             }
         });
         this.button.menu.addMenuItem(manage);
+        this.button.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const quit = new PopupMenu.PopupMenuItem('Probe 종료');
+        quit.connect('activate', () => this.stopService());
+        this.button.menu.addMenuItem(quit);
         Main.panel.addToStatusArea(this.uuid, this.button);
+        this.button.container.hide();
         this.refresh();
         this.timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 3, () => {
             this.refresh();
             return GLib.SOURCE_CONTINUE;
         });
+    }
+    stopService() {
+        try {
+            const proc = Gio.Subprocess.new(['/usr/bin/systemctl', '--user', 'stop', 'probe.service'], Gio.SubprocessFlags.STDERR_PIPE);
+            proc.communicate_utf8_async(null, null, (source, result) => {
+                try {
+                    const [, , stderr] = source.communicate_utf8_finish(result);
+                    if (!source.get_successful()) throw new Error(stderr || '종료 실패');
+                    if (this.window && !this.window.get_if_exited()) this.window.force_exit();
+                    this.button?.container.hide();
+                } catch (e) { Main.notify('Probe', '서비스를 종료하지 못했습니다.'); }
+            });
+        } catch (e) { Main.notify('Probe', '서비스 종료 명령을 실행할 수 없습니다.'); }
     }
     refresh() {
         const base = GLib.getenv('XDG_RUNTIME_DIR') || GLib.get_user_cache_dir();
@@ -36,8 +54,9 @@ export default class ProbeExtension extends Extension {
             const status = JSON.parse(new TextDecoder().decode(bytes));
             if (Date.now() / 1000 - status.timestamp > 75) throw new Error('Stale status');
             this.label.text = `RAM ${status.usage}%   $${(status.cost_micro / 1e6).toFixed(4)}`;
+            this.button.container.show();
         } catch (e) {
-            this.label.text = 'RAM —   $—';
+            this.button.container.hide();
         }
     }
     disable() {
