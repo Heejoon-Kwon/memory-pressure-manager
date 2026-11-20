@@ -83,7 +83,7 @@ class Skills:
 class Advisor:
     """One bounded, structured API call per unseen pressure episode."""
     def __init__(self, settings, budget):
-        self.model = settings.get('model') or ''
+        self.model = settings.get('model') or 'gpt-6-luna'
         self.key = settings.get('api_key') or os.environ.get('OPENAI_API_KEY', '')
         self.budget = budget
 

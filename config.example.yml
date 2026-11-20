@@ -7,5 +7,5 @@ watch:
   systemd_oom_preference: true
 openai:
   api_key: ""
-  model: ""
+  model: gpt-6-luna
   monthly_budget_usd: 0
