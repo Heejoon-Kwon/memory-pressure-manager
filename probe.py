@@ -26,6 +26,8 @@ from priorities import read_priorities
 from response_status import explain
 from tab_response import TabResponse
 from build_info import BUILD
+from memory_knowledge import retrieve
+from memory_reclaim import ReclaimResponse
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -58,16 +60,27 @@ class Skills:
     """Only observed successes are saved. Failed entries are removed."""
     def __init__(self, database):
         self.database = database
+        self.matches = {}
         with sqlite3.connect(database) as db:
             db.execute('CREATE TABLE IF NOT EXISTS app_labels (id TEXT PRIMARY KEY, name TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS skills (scenario TEXT PRIMARY KEY, app TEXT NOT NULL)')
 
     def get(self, scenario, candidates):
         with sqlite3.connect(self.database) as db:
-            row = db.execute('SELECT app FROM skills WHERE scenario=?', (scenario,)).fetchone()
-        return next((app for app in candidates if row and app.key == row[0]), None)
+            rows = db.execute('SELECT scenario, app FROM skills ORDER BY scenario=? DESC', (scenario,)).fetchall()
+        for stored, key in rows:
+            try:
+                compatible = stored == scenario or json.loads(stored)[:2] == json.loads(scenario)[:2]
+            except (ValueError, TypeError):
+                compatible = False
+            app = next((app for app in candidates if app.key == key), None)
+            if compatible and app:
+                self.matches[scenario] = stored
+                return app
+        return None
 
     def save(self, scenario, key):
+        self.matches.pop(scenario, None)
         with sqlite3.connect(self.database) as db:
             db.execute('INSERT OR REPLACE INTO skills VALUES (?,?)', (scenario, key))
 
@@ -77,7 +90,7 @@ class Skills:
 
     def discard(self, scenario):
         with sqlite3.connect(self.database) as db:
-            db.execute('DELETE FROM skills WHERE scenario=?', (scenario,))
+            db.execute('DELETE FROM skills WHERE scenario IN (?,?)', (scenario, self.matches.pop(scenario, scenario)))
 
 
 class Advisor:
@@ -101,7 +114,7 @@ class Advisor:
                         'or choose none. Only the listed identifiers may be returned. '
                         'Use observed pressure and provided resource data; tab RSS may be unavailable. '
                         'You cannot execute actions or provide commands.')
-        payload = json.dumps({'memory': telemetry, 'eligible_apps': candidates}, ensure_ascii=False)
+        payload = json.dumps({'memory': telemetry, 'eligible_apps': candidates, 'reference_policy': retrieve(candidates)}, ensure_ascii=False)
         schema = {'type': 'object', 'properties': {'app': {'type': 'string',
                    'enum': ['none', *choices]}}, 'required': ['app'], 'additionalProperties': False}
         input_rate, output_rate = rates_for(self.model)
@@ -152,10 +165,9 @@ def snapshot(sample):
 
 
 def recovery_verified(before, after, critical_percent, exited):
-    gain = max(128 * MIB, int(before.total * .01))
+    gain = max(32 * MIB, int(before.total * .002))
     return (exited and after.available - before.available >= gain
-            and after.available_percent >= critical_percent + 2
-            and (after.full is None or after.full < 2 or after.full <= (before.full or 0) / 2))
+            and (after.full is None or after.full <= (before.full or 0) + .5))
 
 
 class Probe:
@@ -185,6 +197,7 @@ class Probe:
         self.stop = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.tab_response = TabResponse(self, RUNTIME)
+        self.reclaim_response = ReclaimResponse(self, config)
 
     def event(self, kind, details):
         try:
@@ -193,7 +206,7 @@ class Probe:
             LOG.warning("대응 이력을 저장하지 못했습니다")
 
     def ask_advisor(self, scenario, telemetry, candidates):
-        self.event("ai_request", {"scenario": scenario, "memory": telemetry, "candidates": candidates, "model": self.advisor.model})
+        self.event("ai_request", {"scenario": scenario, "memory": telemetry, "candidates": candidates, "model": self.advisor.model, "sources": [d["source"] for d in retrieve(candidates)]})
         try:
             choice = self.advisor.advise(telemetry, candidates)
         except Exception as exc:
@@ -257,6 +270,8 @@ class Probe:
                         trial['verify_at'] = min(trial['verify_at'], now + max(self.interval, 5))
                 except (OSError, ValueError, psutil.Error):
                     self.event('force_blocked', {'app': trial['app'], 'display_name': trial['target'].name})
+                    self.event('action_cancelled', {'app':trial['app'], 'display_name':trial['target'].name})
+                    trial = None
             if trial and now >= trial['verify_at']:
                 try:
                     proc = get_process(trial['process'].pid)
@@ -280,8 +295,14 @@ class Probe:
                     notify(summary)
                 trial = None
 
-            tab_busy = False
-            if not trial and advice is None and now >= next_action:
+            reclaim_busy = False
+            if not trial and advice is None and not self.tab_response.trial and not self.tab_response.future:
+                reclaim_busy = self.reclaim_response.tick(sample, level, now, apps, settings)
+                if reclaim_busy:
+                    summary = self.reclaim_response.summary
+                    ai_status = '메모리 회수 · ' + summary
+            tab_busy = reclaim_busy
+            if not trial and not reclaim_busy and advice is None and now >= next_action:
                 tab_busy = self.tab_response.tick(sample, level, now)
                 if tab_busy:
                     summary = self.tab_response.summary
@@ -374,7 +395,7 @@ class Probe:
             atomic_json(RUNTIME / 'status.json', {
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
                 'timestamp': time.time(), 'build': BUILD, 'source_dir': str(Path(__file__).resolve().parent), 'pid': os.getpid(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
-                'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
+                'optimization_status': self.reclaim_response.capability, 'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
                                           'blocked_reason': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps),
                                           'eligible': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps) is None, 'priority': priority(a.key, settings) if a.managed else 0}
                                          for a in apps],

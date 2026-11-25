@@ -11,3 +11,11 @@ openai:
   api_key: ""
   model: gpt-6-luna
   monthly_budget_usd: 0
+
+memory_optimization:
+  proactive_reclaim: true
+  reclaim_batch_mib: 64
+  zram:
+    size_percent: 50
+    max_mib: 8192
+    compression: zstd

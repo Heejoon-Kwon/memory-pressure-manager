@@ -71,7 +71,7 @@ Chrome의 설치된 웹 앱(PWA)은 표시 모드가 standalone/minimal-ui/windo
 
 일반 비활성 탭은 discard, 백그라운드의 보호되지 않은 Chrome 앱은 해당 앱 페이지 종료로 처리합니다. 선택된 탭은 discard가 불가능하므로 앱 창 종료는 별도 행동입니다. 현재 전경 창·고정·소리 재생·보호 항목은 제외합니다. 앱 종료도 AI 판단 → 명령 → 브리지 완료 응답 → 호스트 메모리 개선 확인 → 스킬 저장 경로를 사용합니다. 창을 닫으면 저장하지 않은 내용이 사라질 수 있습니다.
 
-관리창 상단 빌드는 `2026.11.25.3`입니다. `.venv/bin/python memory_pressure_manager.py --config config.yml --diagnose`에서 `installed_build`, `running_instance.build`, `running_instance.source_dir`, `chrome_profiles`를 비교하세요. 키는 출력하지 않습니다. `./install.sh`는 이 설치의 이전 관리창을 닫고, 기존 Chrome 호스트의 허용 확장 ID를 유지하면서 실행 파일 경로만 현재 체크아웃으로 맞춥니다. 확장도 Chrome에서 새로고침해야 합니다.
+관리창 상단 빌드는 `2026.11.25.4`입니다. `.venv/bin/python memory_pressure_manager.py --config config.yml --diagnose`에서 `installed_build`, `running_instance.build`, `running_instance.source_dir`, `chrome_profiles`를 비교하세요. 키는 출력하지 않습니다. `./install.sh`는 이 설치의 이전 관리창을 닫고, 기존 Chrome 호스트의 허용 확장 ID를 유지하면서 실행 파일 경로만 현재 체크아웃으로 맞춥니다. 확장도 Chrome에서 새로고침해야 합니다.
 
 가용 메모리 3% 이하 또는 가용 8% 미만이면서 PSI full 10 이상인 긴급 상황에서는 연속 샘플과 API를 기다리지 않고 현재 정책으로 로컬 대응합니다. 그 외에는 설정한 압박 확인 조건과 AI·스킬 경로를 사용합니다. 시스템 커널 설정·스왑·전역 캐시는 임의로 바꾸지 않습니다.
 
@@ -80,3 +80,7 @@ Chrome의 설치된 웹 앱(PWA)은 표시 모드가 standalone/minimal-ui/windo
 보호되지 않은 일반 사용자 프로세스에 SIGTERM을 보낸 뒤 기본 8초 동안 응답이 없으면, 소유자·PID 시작 시각·실행 파일·보호 설정·보호된 하위 프로세스를 다시 확인하고 SIGKILL로 전환합니다. 긴급 상황의 유예는 2초입니다. `watch.allow_force_kill: false`로 강제 종료 전환을 끌 수 있고, 일반 상황의 유예는 `watch.force_kill_after_seconds`로 바꿉니다. 시스템 프로세스와 보호 대상에는 적용하지 않습니다.
 
 목록에서는 실제 앱 아이콘 또는 사이트 파비콘이 있는 항목을 먼저 표시하고, 기본 아이콘만 있는 항목을 아래에 표시합니다. 앱은 각 그룹 안에서 메모리 사용량 내림차순이며, 탭은 각 그룹 안에서 기존 순서를 유지합니다. 이 화면 정렬은 자동 대응 우선순위를 변경하지 않습니다.
+
+## 종료 전에 메모리를 회수하는 자동 관리
+
+[정책·조사 근거·압축 스왑 설치](docs/MEMORY_POLICY.md)를 참고하세요. 새 단계는 주의 상태에서 위임된 cgroup 페이지 회수 → 브라우저 회수 → 앱 종료입니다. 권한이 없는 페이지 회수는 건너뛰고 그 이유를 표시합니다. `configure_memory.py`는 압축 스왑 계획 조회와 명시적 관리자 설치를 제공합니다. 기존 설정 파일에 새 키가 없어도 `memory_optimization` 기본값이 적용됩니다.

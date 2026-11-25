@@ -15,11 +15,14 @@ def inspect(config, priorities, database):
     apps = AnalysisAgent.applications()
     candidates = ResponseAgent.candidates(apps, priorities)
     sample = WatchAgent().sample()
+    from memory_reclaim import target_for
+    reclaimable = sum(target_for(a, priorities) is not None for a in apps)
     result = {
         'installed_build': BUILD,
         'diagnostic_source': str(Path(__file__).resolve().parent),
         'api_key_configured': bool(settings.get('api_key') or __import__('os').environ.get('OPENAI_API_KEY')),
         'model': model,
+        'writable_reclaim_app_scopes': reclaimable,
         'monthly_budget_usd': settings.get('monthly_budget_usd', 0),
         'threshold_available_percent': watch.get('critical_available_percent', 8),
         'consecutive_samples': watch.get('consecutive_samples', 3),

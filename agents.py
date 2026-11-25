@@ -143,7 +143,7 @@ def system_process(proc):
     critical = ('systemd', 'gnome-shell', 'dbus', 'pipewire', 'wireplumber', 'pulseaudio',
                 'xdg-', 'gnome-session', 'gdm', 'xorg', 'xwayland', 'networkmanager',
                 'gnome-keyring', 'ssh-agent', 'gpg-agent', 'dconf', 'at-spi', 'gvfs', 'ibus',
-                'snapd', 'system76', 'polkit', 'kworker', 'kwin', 'plasmashell')
+                'sd-pam', '(sd-pam)', 'evolution-', 'update-notifier', 'gsd-', 'chrome_crashpad', 'snapd', 'system76', 'polkit', 'kworker', 'kwin', 'plasmashell')
     if name.startswith(critical):
         return True
     if EXECUTABLES.get(name) in ('terminal', 'files', 'system-monitor'):
@@ -275,8 +275,10 @@ class ResponseAgent:
             return 'chrome_tab_mode'
         if len(app.leaders) != 1:
             return 'ambiguous_process'
-        if app.rss <= 0:
-            return 'no_memory'
+        if app.key.startswith('process:') and app.name in ('java', 'java.bin'):
+            return 'unknown_jvm'
+        if app.rss < 32 * MIB:
+            return 'insufficient_gain'
         if app.key in unsuccessful_apps:
             return 'previous_attempt_failed'
         return None
@@ -302,7 +304,7 @@ class ResponseAgent:
 
     @staticmethod
     def close(app, current_priorities, force=False):
-        if (not app.managed or app.protected_dependency or len(app.leaders) != 1 or not 1 <= priority(app.key, current_priorities) <= 999
+        if (ResponseAgent.blocked_reason(app, current_priorities) is not None or len(app.leaders) != 1 or not 1 <= priority(app.key, current_priorities) <= 999
                 or (app.key == 'chrome' and chrome_tab_management_enabled())):
             raise ValueError('현재 설정에서 종료할 수 없는 앱입니다')
         original = app.leaders[0]

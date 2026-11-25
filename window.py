@@ -82,7 +82,7 @@ def update_priority(key, value):
         Path(tmp).unlink(missing_ok=True)
 
 
-APP_NAMES = {'chrome_web_app_close': 'Chrome 앱 창 종료', 'chrome_tab_highest_priority': 'Chrome 탭 메모리 회수', 'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
+APP_NAMES = {'reclaim_cgroup': '앱 종료 없는 페이지 회수', 'chrome_web_app_close': 'Chrome 앱 창 종료', 'chrome_tab_highest_priority': 'Chrome 탭 메모리 회수', 'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
              'chrome': 'Google Chrome', 'chromium': 'Chromium', 'firefox': 'Firefox',
              'slack': 'Slack', 'discord': 'Discord', 'edge': 'Microsoft Edge',
              'codium': 'VSCodium', 'pycharm': 'PyCharm', 'webstorm': 'WebStorm'}
@@ -95,6 +95,8 @@ def app_name(key):
 def scenario_text(value):
     try:
         parsed = json.loads(value)
+        if parsed[0] == 'reclaim-v1':
+            return f'페이지 회수 규칙 · swappiness {parsed[1]}'
         if parsed[0] in ('chrome-tab-v1', 'chrome-web-app-v1'):
             return f'Chrome 탭 회수 규칙 · 최우선 회수 숫자 {parsed[2]} · {parsed[1]}'
         pressure, swap, candidates = parsed
@@ -110,6 +112,7 @@ def event_text(kind, details):
     source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
+              'optimization_requested': '종료 없는 페이지 회수 요청', 'optimization_error': '페이지 회수 실행 불가', 'optimization_cancelled': '페이지 회수 검증 취소 · 긴급 대응', 'action_cancelled': '보호 또는 대상 변경 · 평가 취소',
               'action_forced': '응답 없는 앱 강제 종료', 'force_blocked': '강제 종료 차단 · 보호 또는 프로세스 변경',
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
               'no_candidates': '현재 앱 종료 후보 없음', 'ai_disabled': 'AI 분석 사용 불가',
@@ -545,7 +548,7 @@ class Window(Gtk.Window):
             self.cost.set_text(f"${data['cost_micro'] / 1e6:.4f}")
             self.note.set_text(data['status'] if data.get('build') == BUILD else '구버전 서비스 실행 중 · 재설치 필요')
             self.note.set_tooltip_text('실행 위치: ' + data.get('source_dir', '구버전: 위치 정보 없음') + '\n빌드: ' + data.get('build', '구버전'))
-            self.ai_note.set_text('AI · ' + data.get('ai_status', '연결 상태 확인 필요'))
+            self.ai_note.set_text('AI · ' + data.get('ai_status', '연결 상태 확인 필요') + '\n' + data.get('optimization_status', ''))
             self.history_button.set_label(f"대응 기록 보기    ·    저장된 스킬 {data['learned_skills']}")
         saved = read_priorities(STATE / 'priorities.json')
         items = data.get('apps', [])

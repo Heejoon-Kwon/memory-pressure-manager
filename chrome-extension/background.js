@@ -135,7 +135,7 @@ async function syncWindow() {
         discarded: !!tab.discarded, supported: typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url)});
     }
     await chrome.storage.session.set({tabIdentities: identities});
-    if (bridge) bridge.postMessage({type: 'sync', build: '2026.11.25.3', profile, tabs: entries});
+    if (bridge) bridge.postMessage({type: 'sync', build: '2026.11.25.4', profile, tabs: entries});
   } finally { syncing = false; }
 }
 async function applyCommands(commands) {

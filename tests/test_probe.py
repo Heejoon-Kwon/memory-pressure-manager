@@ -156,7 +156,7 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(sum(a.rss for a in apps), sum(p.rss for p in [chrome, helper, idea, code, *services]))
         self.assertEqual(apps[0].rss, 600 * MIB)
         self.assertEqual(apps[0].leaders, [chrome])
-        self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {})], ['chrome', next(a.key for a in apps if a.name == 'java')])
+        self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {})], ['chrome'])
         self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {'chrome': 2, 'idea': 1}) if not a.key.startswith('process:')],
                          ['chrome', 'idea'])
 
