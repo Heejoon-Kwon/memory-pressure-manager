@@ -20,7 +20,7 @@ def rates_for(model):
         now = time.monotonic()
         if _cache is None or now - _cached_at >= CACHE_SECONDS:
             try:
-                req = urllib.request.Request(CATALOG_URL, headers={'Accept': 'application/json', 'User-Agent': 'Memora-pricing/1'})
+                req = urllib.request.Request(CATALOG_URL, headers={'Accept': 'application/json', 'User-Agent': 'memory-pressure-manager/1'})
                 with urllib.request.urlopen(req, timeout=10) as response:
                     payload = response.read(MAX_BYTES + 1)
                 if len(payload) > MAX_BYTES: raise ValueError('catalog too large')

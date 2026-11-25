@@ -15,7 +15,7 @@ class InstallerTests(unittest.TestCase):
             repo = base / 'project with spaces'
             repo.mkdir()
             for file in ('install.sh', 'config.example.yml', 'window.py', 'history.py', 'priorities.py',
-                         'chrome_tabs.py', 'response_labels.py', 'memora.py'):
+                         'chrome_tabs.py', 'response_labels.py', 'memory_pressure_manager.py'):
                 shutil.copy(source / file, repo / file)
             shutil.copytree(source / 'extension', repo / 'extension')
             shutil.copytree(source / 'assets', repo / 'assets')
@@ -38,7 +38,7 @@ class InstallerTests(unittest.TestCase):
                 subprocess.run(['sh', './install.sh'], cwd=repo, env=env, check=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 self.assertEqual((repo / 'config.yml').read_text(), 'existing settings\n')
-                self.assertEqual((units / 'probe.service').readlink(), Path('memora.service'))
-                self.assertIn('/memora.py', (units / 'memora.service').read_text())
-                self.assertEqual((units / 'probe.service.before-memora').read_text(), 'old service\n')
+                self.assertEqual((units / 'probe.service').readlink(), Path('memory-pressure-manager.service'))
+                self.assertIn('/memory_pressure_manager.py', (units / 'memory-pressure-manager.service').read_text())
+                self.assertEqual((units / 'probe.service.before-memory-pressure-manager').read_text(), 'old service\n')
             self.assertTrue((base / 'data/gnome-shell/extensions/probe@local/assets/intellij-idea.svg').is_file())

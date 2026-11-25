@@ -3,9 +3,9 @@ const status = document.getElementById('status');
 async function render() {
   try {
     const result = await chrome.runtime.sendMessage({type: 'test-connection'});
-    status.textContent = result?.error ? 'Memora 연결 안 됨 · 설치 안내를 확인하세요' :
-      result?.running ? 'Memora 연결됨 · ' + (result.critical ? '메모리 압박 감지' : '감시 중') : 'Memora 연결됨 · 서비스가 실행 중이 아닙니다';
-  } catch (_) { status.textContent = 'Memora 연결 안 됨 · 설치 안내를 확인하세요'; }
+    status.textContent = result?.error ? 'Memory Pressure Manager 연결 안 됨 · 설치 안내를 확인하세요' :
+      result?.running ? 'Memory Pressure Manager 연결됨 · ' + (result.critical ? '메모리 압박 감지' : '감시 중') : 'Memory Pressure Manager 연결됨 · 서비스가 실행 중이 아닙니다';
+  } catch (_) { status.textContent = 'Memory Pressure Manager 연결 안 됨 · 설치 안내를 확인하세요'; }
   const tabs = await chrome.tabs.query({});
   const data = await chrome.storage.session.get('tabPriorities');
   const priorities = data.tabPriorities || {};

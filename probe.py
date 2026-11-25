@@ -124,7 +124,7 @@ class Advisor:
 def notify(message):
     LOG.info('%s', message)
     try:
-        subprocess.run(('notify-send', 'Memora', message), timeout=2, check=False,
+        subprocess.run(('notify-send', 'Memory Pressure Manager', message), timeout=2, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         pass
@@ -415,7 +415,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            parser.error('Memora가 이미 실행 중입니다')
+            parser.error('Memory Pressure Manager가 이미 실행 중입니다')
         guard = Probe(config, STATE / 'probe.sqlite3')
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: guard.stop.set())

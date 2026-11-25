@@ -11,7 +11,7 @@ if len(sys.argv) != 2 or not re.fullmatch('[a-p]{32}', sys.argv[1]):
 root = Path(__file__).resolve().parent
 folder = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'google-chrome/NativeMessagingHosts'
 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-manifest = {'name': 'local.probe.tabs', 'description': 'Memora memory status bridge',
+manifest = {'name': 'local.probe.tabs', 'description': 'Memory Pressure Manager memory status bridge',
             'path': str(root / 'chrome_native_host.py'), 'type': 'stdio',
             'allowed_origins': ['chrome-extension://' + sys.argv[1] + '/']}
 path = folder / 'local.probe.tabs.json'

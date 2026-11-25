@@ -155,12 +155,12 @@ def event_text(kind, details):
 
 class HistoryWindow(Gtk.Window):
     def __init__(self, parent):
-        super().__init__(title='Memora · 대응 기록', transient_for=parent)
+        super().__init__(title='메모리 관리 · 대응 기록', transient_for=parent)
         self.set_default_size(450, 760)
         self.set_border_width(22)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.add(root)
-        root.pack_start(label('MEMORA', 'eyebrow'), False, False, 0)
+        root.pack_start(label('MEMORY PRESSURE MANAGER', 'eyebrow'), False, False, 0)
         root.pack_start(label('AI 제안과 대응 기록', 'title'), False, False, 0)
         note = label('기록은 이 기기에만 저장됩니다. 최근 2,000건까지 보관하고 최신 200건을 표시합니다.', 'muted')
         note.set_line_wrap(True)
@@ -210,7 +210,7 @@ class HistoryWindow(Gtk.Window):
                 except (ValueError, TypeError, KeyError, OverflowError):
                     continue
         except (sqlite3.Error, OSError):
-            self.card('기록을 불러올 수 없습니다', 'Memora가 실행 중인지 확인한 뒤 다시 시도하세요.')
+            self.card('기록을 불러올 수 없습니다', 'Memory Pressure Manager가 실행 중인지 확인한 뒤 다시 시도하세요.')
         self.content.show_all()
 
 
@@ -276,12 +276,12 @@ def set_favicon(image, data):
 
 class Window(Gtk.Window):
     def __init__(self):
-        super().__init__(title='Memora · 메모리 관리')
+        super().__init__(title='메모리 관리')
         self.set_default_size(440, 840)
         self.set_size_request(390, 560)
         self.connect('destroy', self.destroyed)
         bar = Gtk.HeaderBar(show_close_button=True)
-        bar.set_title('Memora')
+        bar.set_title('메모리 관리')
         bar.set_decoration_layout('icon:minimize,close')
         self.set_titlebar(bar)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -508,7 +508,7 @@ class Window(Gtk.Window):
         if not active:
             self.metrics.set_text('— %')
             self.health.set_text('감시 중지')
-            self.note.set_text('Memora 서비스가 실행 중이 아닙니다')
+            self.note.set_text('Memory Pressure Manager 서비스가 실행 중이 아닙니다')
             self.ai_note.set_text('서비스를 시작하면 자동 대응을 준비합니다')
             self.available.set_text('—'); self.swap.set_text('—'); self.cost.set_text('—')
             self.ram_bar.set_fraction(0)

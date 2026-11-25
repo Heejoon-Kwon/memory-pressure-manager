@@ -1,6 +1,6 @@
 {
   "uuid": "probe@local",
-  "name": "Memora",
+  "name": "Memory Pressure Manager",
   "description": "Memory monitoring, recovery and learned responses",
   "shell-version": [
     "45",

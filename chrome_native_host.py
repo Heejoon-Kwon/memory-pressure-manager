@@ -17,7 +17,7 @@ COOLDOWN = 90
 
 def service_active():
     try:
-        return subprocess.run(['/usr/bin/systemctl', '--user', 'is-active', '--quiet', 'memora.service', 'probe.service'],
+        return subprocess.run(['/usr/bin/systemctl', '--user', 'is-active', '--quiet', 'memory-pressure-manager.service', 'memora.service', 'probe.service'],
                               timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
