@@ -59,18 +59,19 @@ def clean_tabs(tabs):
             except (ValueError, struct.error):
                 favicon = ''
         result.append({'favicon': favicon, 'id': ident, 'token': token, 'title': title[:160], 'priority': prio,
+                       'standalone': item.get('standalone') is True, 'windowFocused': item.get('windowFocused') is not False,
                        'active': item.get('active') is True, 'pinned': item.get('pinned') is True,
                        'audible': item.get('audible') is True, 'discarded': item.get('discarded') is True,
                        'supported': item.get('supported') is True})
     return result
 
 
-def sync(base, profile, tabs):
+def sync(base, profile, tabs, build=None):
     if not valid_profile(profile):
         raise ValueError('invalid profile')
     items = clean_tabs(tabs)
     path = folder(base)
-    write_atomic(path / (profile + '.json'), {'timestamp': time.time(), 'profile': profile, 'tabs': items})
+    write_atomic(path / (profile + '.json'), {'timestamp': time.time(), 'profile': profile, 'tabs': items, 'build': build})
     pending = path / (profile + '.queue')
     with (path / (profile + '.lock')).open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -126,7 +127,7 @@ def candidates(base):
     items = []
     for profile in snapshots(base):
         for tab in profile['tabs']:
-            if tab['priority'] > 0 and tab['supported'] and not any(tab[x] for x in ('active', 'pinned', 'audible', 'discarded')):
+            if tab['priority'] > 0 and tab['supported'] and not any(tab[x] for x in ('pinned', 'audible', 'discarded')) and (not tab['active'] or (tab['standalone'] and not tab['windowFocused'])):
                 items.append({**tab, 'profile': profile['profile']})
     return sorted(items, key=lambda t: (-t['priority'], t['profile'], t['id']))
 
@@ -147,4 +148,22 @@ def request_discard(base, tab):
             commands = []
         if commands:
             raise ValueError('priority changes are pending')
-        write_atomic(pending, [{'id': tab['id'], 'token': tab['token'], 'action': 'discard', 'expires': time.time() + 12}])
+        write_atomic(pending, [{'id': tab['id'], 'token': tab['token'], 'action': 'close_web_app' if tab.get('standalone') else 'discard', 'expires': time.time() + 12}])
+
+
+def report_action(base, message):
+    profile, token = message.get('profile'), message.get('token')
+    if not valid_profile(profile) or not valid_profile(token) or message.get('result') != 'done':
+        raise ValueError('invalid receipt')
+    if message.get('action') not in ('discard', 'close_web_app') or type(message.get('id')) is not int:
+        raise ValueError('invalid action')
+    write_atomic(folder(base) / (profile + '-' + token + '.result'),
+                 {'timestamp': time.time(), 'id': message['id'], 'action': message['action'], 'result': 'done'})
+
+
+def action_done(base, tab, since):
+    try:
+        value = json.loads((folder(base) / (tab['profile'] + '-' + tab['token'] + '.result')).read_text())
+        return value['timestamp'] >= since and value['id'] == tab['id'] and value['result'] == 'done'
+    except (OSError, ValueError, KeyError, TypeError):
+        return False

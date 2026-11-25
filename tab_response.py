@@ -1,10 +1,15 @@
 """AI -> tab discard -> measured verification -> reusable rule. No tab content sent to AI."""
 import json
 import sqlite3
-from chrome_tabs import candidates, request_discard, snapshots
+import time
+from chrome_tabs import candidates, request_discard, snapshots, action_done
 from agents import MIB
 
 RULE = 'chrome_tab_highest_priority'
+WEB_RULE = 'chrome_web_app_close'
+
+def rule_for(tab):
+    return WEB_RULE if tab.get('standalone') else RULE
 
 
 class TabResponse:
@@ -29,13 +34,14 @@ class TabResponse:
             tab = trial['tab']
             observed = any(t['id'] == tab['id'] and t['token'] == tab['token'] and t['discarded']
                            for p in snapshots(self.runtime) if p['profile'] == tab['profile'] for t in p['tabs'])
+            observed = observed or action_done(self.runtime, tab, trial['requested_at'])
             gain = sample.available - trial['before'].available
             recovered = observed and gain >= max(32 * MIB, int(sample.total * .002)) and (
                 sample.full is None or sample.full < 2 or sample.full <= (trial['before'].full or 0) / 2)
-            details = {'scenario': trial['scenario'], 'app': RULE, 'source': trial['source'],
+            details = {'scenario': trial['scenario'], 'app': trial['rule'], 'source': trial['source'],
                        'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)}
             if recovered:
-                o.skills.save(trial['scenario'], RULE)
+                o.skills.save(trial['scenario'], trial['rule'])
                 o.event('skill_saved', details)
                 self.summary = '탭 회수 후 메모리 회복 확인 · 스킬 저장'
             else:
@@ -44,6 +50,10 @@ class TabResponse:
                 self.summary = '탭 회수 효과 미확인 · 해당 스킬 해제'
             self.trial = None
             return True
+        emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
+        if emergency and self.future and not self.future.done() and not self.trial:
+            self.future = None
+            return self.act(sample, level, now, 'emergency')
         if self.future:
             if not self.future.done():
                 self.summary = 'AI가 Chrome 탭 메모리 회수 판단 중'
@@ -62,6 +72,9 @@ class TabResponse:
                 self.declined = True
                 self.summary = 'AI가 이번 압박 상황의 탭 회수 보류'
                 return True
+            current = candidates(self.runtime)
+            if not current or rule_for(current[0]) != self.requested_rule:
+                return False
             # Live candidates and policy are checked below, never old tab IDs.
             return self.act(sample, level, now, source)
         if level != 'critical' or now < self.next_action or self.declined:
@@ -72,22 +85,25 @@ class TabResponse:
         scenario = self.scenario(sample, eligible)
         with sqlite3.connect(o.database) as db:
             learned = db.execute('SELECT app FROM skills WHERE scenario=?', (scenario,)).fetchone()
-        if learned and learned[0] == RULE:
+        if learned and learned[0] == rule_for(eligible[0]):
             return self.act(sample, level, now, 'skill')
+        if emergency:
+            return self.act(sample, level, now, 'emergency')
         if o.advisor.enabled and not self.ai_failed:
             telemetry = {'available_mib': round(sample.available / MIB), 'total_mib': round(sample.total / MIB),
                          'psi_some_avg10': sample.some, 'psi_full_avg10': sample.full,
                          'eligible_tab_count': len(eligible), 'highest_discard_priority': eligible[0]['priority'],
-                         'action': 'discard one inactive unprotected browser tab; reload when revisited',
+                         'action': 'close one unfocused standalone web-app window' if eligible[0].get('standalone') else 'discard one inactive unprotected browser tab; reload when revisited',
                          'tab_rss_available': False}
-            self.future = o.executor.submit(o.ask_advisor, scenario, telemetry, [{'id': RULE, 'action': 'discard_tab'}])
+            self.requested_rule = rule_for(eligible[0])
+            self.future = o.executor.submit(o.ask_advisor, scenario, telemetry, [{'id': rule_for(eligible[0]), 'action': 'close_web_app' if eligible[0].get('standalone') else 'discard_tab'}])
             self.summary = 'AI에 Chrome 탭 회수 판단 요청'
             return True
         return self.act(sample, level, now, 'local')
 
     @staticmethod
     def scenario(sample, eligible):
-        return json.dumps(['chrome-tab-v1', 'stall' if (sample.full or 0) >= 2 else 'low-available',
+        return json.dumps(['chrome-web-app-v1' if eligible[0].get('standalone') else 'chrome-tab-v1', 'stall' if (sample.full or 0) >= 2 else 'low-available',
                            eligible[0]['priority']])
 
     def act(self, sample, level, now, source):
@@ -104,9 +120,10 @@ class TabResponse:
             self.next_action = now + self.owner.interval
             self.summary = 'Chrome 탭 상태 변경 · 재확인 대기'
             return True
-        self.next_action = now + self.owner.cooldown
+        emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
+        self.next_action = now + (self.owner.interval if emergency else self.owner.cooldown)
         self.trial = {'tab': tab, 'before': sample, 'scenario': scenario, 'source': source,
-                      'verify_at': now + self.owner.verify_seconds}
-        self.owner.event('action_requested', {'scenario': scenario, 'app': RULE, 'source': source})
+                      'verify_at': now + self.owner.verify_seconds, 'requested_at': time.time(), 'rule': rule_for(tab)}
+        self.owner.event('action_requested', {'scenario': scenario, 'app': rule_for(tab), 'source': source})
         self.summary = 'Chrome 탭 회수 요청 · 회복 검증 대기'
         return True

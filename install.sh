@@ -11,7 +11,7 @@ python3 -m venv .venv
 extensions="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/probe@local"
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$extensions/assets" "$units"
-install -m 644 extension/extension.js extension/metadata.json window.py history.py priorities.py chrome_tabs.py response_labels.py "$extensions/"
+install -m 644 extension/extension.js extension/metadata.json window.py history.py priorities.py chrome_tabs.py response_labels.py build_info.py "$extensions/"
 install -m 644 assets/*.svg "$extensions/assets/"
 # systemd specifiers and double quotes require escaping inside ExecStart.
 escaped_root=$(printf '%s' "$root" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g')
@@ -41,6 +41,14 @@ Alias=probe.service memora.service
 UNIT
 ln -sfn memory-pressure-manager.service "$units/probe.service"
 ln -sfn memory-pressure-manager.service "$units/memora.service"
+# Close only this project's management windows, so old imported UI code is not left running.
+if [ -x "$root/.venv/bin/python" ]; then
+    "$root/.venv/bin/python" "$root/stop_old_windows.py"
+fi
+# Repoint an already-registered native host to this checkout without changing extension IDs.
+if [ -x "$root/.venv/bin/python" ]; then
+    "$root/.venv/bin/python" "$root/repair_native_host.py"
+fi
 systemctl --user daemon-reload
 systemctl --user enable memory-pressure-manager.service
 systemctl --user restart memory-pressure-manager.service

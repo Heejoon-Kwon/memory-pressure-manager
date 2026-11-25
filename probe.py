@@ -25,6 +25,7 @@ from history import initialize, record
 from priorities import read_priorities
 from response_status import explain
 from tab_response import TabResponse
+from build_info import BUILD
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -50,7 +51,7 @@ def atomic_json(path, value):
 
 
 def overrides():
-    return {k: v for k, v in read_priorities(STATE / 'priorities.json').items() if k in APP_NAMES}
+    return {k: v for k, v in read_priorities(STATE / 'priorities.json').items() if k in APP_NAMES or (k.startswith('process:') and len(k) == 28)}
 
 
 class Skills:
@@ -58,6 +59,7 @@ class Skills:
     def __init__(self, database):
         self.database = database
         with sqlite3.connect(database) as db:
+            db.execute('CREATE TABLE IF NOT EXISTS app_labels (id TEXT PRIMARY KEY, name TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS skills (scenario TEXT PRIMARY KEY, app TEXT NOT NULL)')
 
     def get(self, scenario, candidates):
@@ -164,6 +166,10 @@ class Probe:
         confirm = int(cfg.get('consecutive_samples', 3))
         self.verify_seconds = int(cfg.get('verification_seconds', 25))
         self.cooldown = int(cfg.get('cooldown_seconds', 90))
+        self.allow_force = bool(cfg.get('allow_force_kill', True))
+        self.force_after = int(cfg.get('force_kill_after_seconds', 8))
+        if not 2 <= self.force_after <= 60:
+            raise ValueError('force_kill_after_seconds는 2~60초여야 합니다')
         if not (2 <= self.interval <= 60 and 3 <= self.threshold <= 20 and 2 <= confirm <= 10
                 and self.interval <= self.verify_seconds <= 120 and self.cooldown >= 60):
             raise ValueError('watch 설정 범위를 확인하세요')
@@ -216,22 +222,41 @@ class Probe:
             now = time.monotonic()
             sample = self.watch.sample()
             level = self.analysis.pressure(sample)
+            emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
+            if emergency:
+                level = 'critical'
             if level != last_level and level != 'normal':
                 self.event('pressure_' + level, {'memory': snapshot(sample)})
             last_level = level
             current_settings = overrides()
-            if now >= next_inventory or current_settings != settings:
+            if now >= next_inventory or current_settings != settings or emergency:
                 apps = self.analysis.applications()
+                with sqlite3.connect(self.database) as db:
+                    db.executemany('INSERT OR REPLACE INTO app_labels VALUES (?,?)', [(a.key, a.name) for a in apps])
                 next_inventory = now + 15
                 settings = current_settings
                 if self.protection:
                     self.protection.sync(apps, settings)
+            if advice and advice[1].done() and not ResponseAgent.candidates(apps, settings):
+                # A completed app request must not block tab handling after its app disappeared.
+                advice = None
+                used_advice = False
             if level == 'normal':
                 if summary.startswith('메모리 압박 · '):
                     summary = '메모리 감시 중'
                 used_advice = False
                 declined_scenarios.clear()
                 unsuccessful_apps.clear()
+            if trial and self.allow_force and not trial.get('forced') and now >= trial['force_at']:
+                trial['forced'] = True
+                try:
+                    alive = get_process(trial['process'].pid)
+                    if alive and alive.started == trial['process'].started:
+                        ResponseAgent.close(trial['target'], overrides(), force=True)
+                        self.event('action_forced', {'app': trial['app'], 'display_name': trial['target'].name, 'source': trial['source']})
+                        trial['verify_at'] = min(trial['verify_at'], now + max(self.interval, 5))
+                except (OSError, ValueError, psutil.Error):
+                    self.event('force_blocked', {'app': trial['app'], 'display_name': trial['target'].name})
             if trial and now >= trial['verify_at']:
                 try:
                     proc = get_process(trial['process'].pid)
@@ -243,12 +268,12 @@ class Probe:
                 key = trial['scenario']
                 if recovery_verified(trial['before'], sample, self.threshold, exited):
                     self.skills.save(key, trial['app'])
-                    self.event('skill_saved', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
+                    self.event('skill_saved', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'display_name': trial.get('display_name'), 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
                     summary = '가용 메모리 회복 확인 · 대응 기록 저장'
                     notify(summary)
                 else:
                     self.skills.discard(key)
-                    self.event('recovery_failed', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
+                    self.event('recovery_failed', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'display_name': trial.get('display_name'), 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
                     unsuccessful_apps.add(trial['app'])
                     summary = '메모리 회복 미확인 · 저장된 대응 해제'
                     used_advice = False
@@ -306,7 +331,12 @@ class Probe:
                         except Exception as exc:
                             ai_status = 'AI 오류: ' + type(exc).__name__
                             LOG.warning('API 분석을 완료하지 못함 (%s)', type(exc).__name__)
-                    if not app and not declined and not advice and not used_advice and self.advisor.enabled:
+                    if emergency and not app:
+                        advice = None
+                        declined = False
+                        used_advice = True
+                        source = 'emergency'
+                    if not app and not emergency and not declined and not advice and not used_advice and self.advisor.enabled:
                         used_advice = True
                         payload = [{'id': a.key, 'rss_mib': round(a.rss / MIB)} for a in candidates]
                         advice = (scenario, self.executor.submit(self.ask_advisor, scenario, snapshot(sample), payload))
@@ -319,7 +349,7 @@ class Probe:
                         current = overrides()
                         fresh = [a for a in ResponseAgent.candidates(apps, current)
                                  if a.key not in unsuccessful_apps]
-                        next_action = now + self.cooldown
+                        next_action = now + (self.interval if emergency else self.cooldown)
                         if fresh and priority(app.key, current) == priority(fresh[0].key, current):
                             try:
                                 ResponseAgent.close(app, current)
@@ -329,23 +359,24 @@ class Probe:
                                 unsuccessful_apps.add(app.key)
                                 LOG.info('앱 종료 요청 보류 (%s)', type(exc).__name__)
                             else:
-                                self.event('action_requested', {'scenario': scenario, 'app': app.key, 'source': source})
+                                self.event('action_requested', {'scenario': scenario, 'app': app.key, 'source': source, 'display_name': app.name})
                                 summary = app.name + ' 종료 요청 · 메모리 회복 확인 중'
                                 notify(summary)
                                 trial = {'scenario': scenario, 'app': app.key, 'process': app.leaders[0],
-                                         'before': sample, 'source': source, 'verify_at': now + self.verify_seconds}
+                                         'before': sample, 'source': source, 'display_name': app.name, 'target': app, 'forced': False,
+                                         'force_at': now + (2 if emergency else self.force_after), 'verify_at': now + self.verify_seconds}
                     elif declined:
-                        next_action = now + self.cooldown
+                        next_action = now + (self.interval if emergency else self.cooldown)
                         summary = '현재 대응 후보의 종료 보류'
             elif level != 'critical' and advice and advice[1].done():
                 advice = None
 
             atomic_json(RUNTIME / 'status.json', {
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
-                'timestamp': time.time(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
+                'timestamp': time.time(), 'build': BUILD, 'source_dir': str(Path(__file__).resolve().parent), 'pid': os.getpid(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
                 'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
                                           'blocked_reason': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps),
-                                          'eligible': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps) is None, 'priority': priority(a.key, settings)}
+                                          'eligible': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps) is None, 'priority': priority(a.key, settings) if a.managed else 0}
                                          for a in apps],
                 'protected_scopes': len(self.protection.applied) if self.protection else 0,
                 'learned_skills': self.skills.count(),

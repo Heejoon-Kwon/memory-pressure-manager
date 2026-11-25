@@ -13,7 +13,8 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk, Gio, GdkPixbuf, Pango
 import base64
-from history import read_history
+from build_info import BUILD
+from history import read_history, read_labels
 from priorities import read_priorities
 from chrome_tabs import snapshots, enqueue
 from response_labels import REASONS
@@ -81,7 +82,7 @@ def update_priority(key, value):
         Path(tmp).unlink(missing_ok=True)
 
 
-APP_NAMES = {'chrome_tab_highest_priority': 'Chrome 탭 메모리 회수', 'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
+APP_NAMES = {'chrome_web_app_close': 'Chrome 앱 창 종료', 'chrome_tab_highest_priority': 'Chrome 탭 메모리 회수', 'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
              'chrome': 'Google Chrome', 'chromium': 'Chromium', 'firefox': 'Firefox',
              'slack': 'Slack', 'discord': 'Discord', 'edge': 'Microsoft Edge',
              'codium': 'VSCodium', 'pycharm': 'PyCharm', 'webstorm': 'WebStorm'}
@@ -94,7 +95,7 @@ def app_name(key):
 def scenario_text(value):
     try:
         parsed = json.loads(value)
-        if parsed[0] == 'chrome-tab-v1':
+        if parsed[0] in ('chrome-tab-v1', 'chrome-web-app-v1'):
             return f'Chrome 탭 회수 규칙 · 최우선 회수 숫자 {parsed[2]} · {parsed[1]}'
         pressure, swap, candidates = parsed
         pressure_text = {'stall': '메모리 압박', 'low-available': '가용 메모리 부족',
@@ -105,10 +106,11 @@ def scenario_text(value):
 
 
 def event_text(kind, details):
-    app = app_name(details.get('app'))
-    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단'}.get(details.get('source'), '')
+    app = details.get('display_name') or app_name(details.get('app'))
+    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
+              'action_forced': '응답 없는 앱 강제 종료', 'force_blocked': '강제 종료 차단 · 보호 또는 프로세스 변경',
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
               'no_candidates': '현재 앱 종료 후보 없음', 'ai_disabled': 'AI 분석 사용 불가',
               'tab_discarded': 'Chrome 탭 메모리 회수', 'tab_failed': 'Chrome 탭 메모리 회수 실패',
@@ -193,12 +195,13 @@ class HistoryWindow(Gtk.Window):
         for child in self.content.get_children():
             self.content.remove(child)
         try:
+            APP_NAMES.update(read_labels(STATE / 'probe.sqlite3'))
             skills, events = read_history(STATE / 'probe.sqlite3')
             self.content.pack_start(label(f'현재 저장된 스킬 · {len(skills)}개', 'eyebrow'), False, False, 0)
             if not skills:
                 self.card('저장된 스킬 없음', '대응 후 메모리 회복이 확인되면 저장됩니다.')
             for scenario, app in skills:
-                self.card(app_name(app) + (' 규칙' if app == 'chrome_tab_highest_priority' else ' 종료 요청'), scenario_text(scenario))
+                self.card(app_name(app) + (' 규칙' if app in ('chrome_tab_highest_priority', 'chrome_web_app_close') else ' 종료 요청'), scenario_text(scenario))
             self.content.pack_start(label('최근 활동', 'eyebrow'), False, False, 0)
             if not events:
                 self.card('아직 기록이 없습니다', '이 업데이트 이후 발생하는 AI 제안과 대응부터 기록됩니다.')
@@ -215,6 +218,8 @@ class HistoryWindow(Gtk.Window):
 
 
 APP_ICONS = {
+    'terminal': ('org.gnome.Terminal', 'org.gnome.Console', 'utilities-terminal'),
+    'files': ('org.gnome.Nautilus', 'system-file-manager'),
     'chrome': ('google-chrome', 'chromium', 'web-browser'), 'chromium': ('chromium', 'web-browser'),
     'idea': ('intellij-idea', 'jetbrains-idea', 'com.jetbrains.IntelliJ-IDEA-Community', 'applications-development'),
     'code': ('com.visualstudio.code', 'code', 'visual-studio-code', 'applications-development'),
@@ -282,6 +287,7 @@ class Window(Gtk.Window):
         self.connect('destroy', self.destroyed)
         bar = Gtk.HeaderBar(show_close_button=True)
         bar.set_title('메모리 관리')
+        bar.set_subtitle(BUILD)
         bar.set_decoration_layout('icon:minimize,close')
         self.set_titlebar(bar)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
@@ -316,7 +322,7 @@ class Window(Gtk.Window):
         filters = Gtk.Box(spacing=4)
         filters.get_style_context().add_class('filter')
         group = None
-        for key, text in (('all', '전체'), ('apps', '앱'), ('tabs', 'Chrome 탭')):
+        for key, text in (('all', '전체'), ('apps', '프로세스'), ('tabs', 'Chrome 탭')):
             button = Gtk.RadioButton.new_with_label_from_widget(group, text)
             button.set_mode(False)
             if group is None:
@@ -325,13 +331,13 @@ class Window(Gtk.Window):
             filters.pack_start(button, True, True, 0)
         self.filter = 'all'
         root.pack_start(filters, False, False, 0)
-        self.search = Gtk.SearchEntry(placeholder_text='앱 이름 또는 탭 제목 검색')
+        self.search = Gtk.SearchEntry(placeholder_text='앱·프로세스 또는 탭 제목 검색')
         self.search.connect('search-changed', lambda *_: self.apply_filter())
         root.pack_start(self.search, False, False, 0)
         self.rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.tab_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.rows.set_sort_func(lambda a, b: (a.sort_key > b.sort_key) - (a.sort_key < b.sort_key))
-        self.apps_heading = label('앱', 'eyebrow')
+        self.apps_heading = label('앱 · 프로세스', 'eyebrow')
         self.tabs_heading = label('CHROME 탭', 'eyebrow')
         self.tab_status = label('Chrome 연결 확인 중', 'muted')
         self.tab_status.set_line_wrap(True)
@@ -471,7 +477,8 @@ class Window(Gtk.Window):
             profiles = []
         items = [(p['profile'], t) for p in profiles for t in p['tabs']]
         self.tabs_heading.set_text(f'CHROME 탭  {len(items)}')
-        self.tab_status.set_text(f'{len(profiles)}개 프로필 연결 · 탭별 메모리는 Chrome이 제공하지 않습니다'
+        outdated = any(p.get('build') != BUILD for p in profiles)
+        self.tab_status.set_text('Chrome 확장 업데이트 필요 · 확장 페이지에서 새로고침하세요' if outdated else f'{len(profiles)}개 프로필 연결 · 탭별 메모리는 Chrome이 제공하지 않습니다'
                                  if profiles else 'Chrome 확장을 연결하면 열린 탭이 여기에 표시됩니다')
         keys = {(p, t['id'], t['token']) for p, t in items}
         for key in self.tabs.keys() - keys:
@@ -497,8 +504,11 @@ class Window(Gtk.Window):
                 pending = None
             flags = [name for flag, name in (('active', '사용 중'), ('pinned', '고정'),
                      ('audible', '소리 재생'), ('discarded', '회수됨')) if item[flag]]
+            if item.get('standalone'):
+                flags = ['Chrome 앱 · 창 종료', *[f for f in flags if f != '사용 중']]
+                flags.append('사용 중' if item.get('windowFocused') else '백그라운드')
             entry['memory'].set_text('회수됨' if item['discarded'] else '')
-            entry['detail'].set_text('저장 중…' if pending else ' · '.join(flags or ['프로필 ' + profile[:4]]))
+            entry['detail'].set_text('저장 중…' if pending else ' · '.join(flags or [('Chrome 앱 · 창 종료' if item.get('standalone') else '프로필 ' + profile[:4])]))
             if not pending:
                 self.update_controls(entry, item['priority'], item['supported'])
 
@@ -521,12 +531,13 @@ class Window(Gtk.Window):
             self.available.set_text(f"{data['available_mib'] / 1024:.1f} GiB")
             self.swap.set_text(f"{data.get('swap_used_mib', 0) / 1024:.1f} GiB")
             self.cost.set_text(f"${data['cost_micro'] / 1e6:.4f}")
-            self.note.set_text(data['status'])
+            self.note.set_text(data['status'] if data.get('build') == BUILD else '구버전 서비스 실행 중 · 재설치 필요')
+            self.note.set_tooltip_text('실행 위치: ' + data.get('source_dir', '구버전: 위치 정보 없음') + '\n빌드: ' + data.get('build', '구버전'))
             self.ai_note.set_text('AI · ' + data.get('ai_status', '연결 상태 확인 필요'))
             self.history_button.set_label(f"대응 기록 보기    ·    저장된 스킬 {data['learned_skills']}")
         saved = read_priorities(STATE / 'priorities.json')
         items = data.get('apps', [])
-        self.apps_heading.set_text(f'앱  {len(items)}')
+        self.apps_heading.set_text(f'앱 · 프로세스  {len(items)}')
         current = {t['id'] for t in items}
         for key in self.entries.keys() - current:
             self.rows.remove(self.entries.pop(key)['row'])
@@ -543,7 +554,7 @@ class Window(Gtk.Window):
             reason = REASONS.get(item.get('blocked_reason'), '자동 대응 가능')
             entry['detail'].set_text(reason)
             entry['detail'].set_tooltip_text(reason)
-            self.update_controls(entry, saved.get(key, item['priority']))
+            self.update_controls(entry, saved.get(key, item['priority']), item.get('blocked_reason') != 'system_process')
         self.rows.invalidate_sort()
         self.render_tabs()
         self.apply_filter()

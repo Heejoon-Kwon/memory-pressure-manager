@@ -1,5 +1,8 @@
 """Labels shared by the monitoring window without importing optional dependencies."""
 REASONS = {
+    'protected_descendant': '보호된 앱의 상위 프로세스 · 종료 제외',
+    'no_memory': '회수할 메모리 없음',
+    'system_process': '시스템·세션 프로세스 · 조회 전용',
     'protected': '보호 중',
     'chrome_tab_mode': 'Chrome 전체 종료 차단 · 탭별 관리',
     'ambiguous_process': '대표 프로세스를 하나로 확인할 수 없음',

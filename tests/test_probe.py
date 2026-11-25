@@ -18,6 +18,50 @@ def process(pid, executable, rss=200, *, parent=1, args=()):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_terminal_files_and_other_processes_are_tracked_without_double_counting(self):
+        from dataclasses import replace
+        import os
+        terminal = process(100, 'gnome-terminal-server', rss=80)
+        shell = process(101, 'bash', rss=20, parent=100)
+        files = process(200, 'nautilus', rss=180)
+        unknown = process(300, 'my-worker', rss=300)
+        system = replace(process(400, 'gnome-shell', rss=500), uid=os.getuid())
+        foreign = replace(process(500, 'database-server', rss=700), uid=os.getuid()+1)
+        apps = group_apps([terminal, shell, files, unknown, system, foreign])
+        self.assertEqual(sum(a.rss for a in apps), 1780*MIB)
+        self.assertEqual(next(a for a in apps if a.key == 'terminal').rss, 100*MIB)
+        self.assertEqual(next(a for a in apps if a.key == 'files').name, '파일 탐색기')
+        for app in apps:
+            if app.name in ('gnome-shell', 'database-server'):
+                self.assertEqual(ResponseAgent.blocked_reason(app, {app.key:999}), 'system_process')
+                with self.assertRaises(ValueError):
+                    ResponseAgent.close(app, {app.key:999})
+        self.assertIn('files', [a.key for a in ResponseAgent.candidates(apps, {})])
+
+    def test_terminal_with_protected_ide_is_not_closed_indirectly(self):
+        terminal = process(10, 'gnome-terminal-server', rss=80)
+        shell = process(11, 'bash', rss=20, parent=10)
+        idea = process(12, 'java', rss=2000, parent=11, args=('-Didea.platform.prefix=Idea',))
+        apps = group_apps([terminal, shell, idea])
+        self.assertEqual(ResponseAgent.candidates(apps, {'terminal':999,'idea':0}), [])
+        app = next(a for a in apps if a.key == 'terminal')
+        self.assertEqual(ResponseAgent.blocked_reason(app, {'terminal':999}), 'protected_descendant')
+        with self.assertRaises(ValueError):
+            ResponseAgent.close(app, {'terminal':999})
+
+    def test_force_kill_still_obeys_protection_and_pid_identity(self):
+        import signal
+        app = group_apps([process(10, 'nautilus')])[0]
+        with patch('agents.os.pidfd_open', return_value=99), patch('agents.os.close'), \
+             patch('agents.signal.pidfd_send_signal') as sent, \
+             patch('agents.get_process', return_value=app.leaders[0]), \
+             patch('agents.has_protected_descendants', return_value=False):
+            with self.assertRaises(ValueError):
+                ResponseAgent.close(app, {'files':0}, force=True)
+            sent.assert_not_called()
+            ResponseAgent.close(app, {'files':500}, force=True)
+            sent.assert_called_once_with(99, signal.SIGKILL)
+
     def test_priority_migration_and_new_order(self):
         import json
         from priorities import read_priorities
@@ -108,11 +152,12 @@ class ProbeTests(unittest.TestCase):
         code = process(30, 'code')
         services = [process(40, 'gnome-shell'), process(41, 'systemd'), process(42, 'java')]
         apps = group_apps([chrome, helper, idea, code, *services])
-        self.assertEqual([a.name for a in apps], ['Google Chrome', 'IntelliJ IDEA', 'VS Code'])
+        self.assertEqual([a.name for a in apps if not a.key.startswith('process:')], ['Google Chrome', 'IntelliJ IDEA', 'VS Code'])
+        self.assertEqual(sum(a.rss for a in apps), sum(p.rss for p in [chrome, helper, idea, code, *services]))
         self.assertEqual(apps[0].rss, 600 * MIB)
         self.assertEqual(apps[0].leaders, [chrome])
-        self.assertEqual(ResponseAgent.candidates(apps, {}), [])
-        self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {'chrome': 2, 'idea': 1})],
+        self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {})], ['chrome', next(a.key for a in apps if a.name == 'java')])
+        self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {'chrome': 2, 'idea': 1}) if not a.key.startswith('process:')],
                          ['chrome', 'idea'])
 
     def test_multiple_instances_and_opt_out_are_ineligible(self):

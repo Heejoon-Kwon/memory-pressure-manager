@@ -15,7 +15,7 @@ class InstallerTests(unittest.TestCase):
             repo = base / 'project with spaces'
             repo.mkdir()
             for file in ('install.sh', 'config.example.yml', 'window.py', 'history.py', 'priorities.py',
-                         'chrome_tabs.py', 'response_labels.py', 'memory_pressure_manager.py'):
+                         'chrome_tabs.py', 'response_labels.py', 'build_info.py', 'memory_pressure_manager.py'):
                 shutil.copy(source / file, repo / file)
             shutil.copytree(source / 'extension', repo / 'extension')
             shutil.copytree(source / 'assets', repo / 'assets')

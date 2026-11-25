@@ -7,8 +7,38 @@ async function settings() {
   return data.tabPriorities || {};
 }
 async function inspectTabs() {
-  const [tabs, priorities] = await Promise.all([chrome.tabs.query({}), settings()]);
+  const [tabs, priorities] = await Promise.all([allTabs(), settings()]);
   return tabs.map(tab => ({tab, setting: priorities[tab.id]}));
+}
+async function allTabs() {
+  const tabs = await chrome.tabs.query({});
+  const session = await chrome.storage.session.get('standaloneTabs');
+  for (const id of Object.keys(session.standaloneTabs || {})) {
+    if (!tabs.some(t => t.id === Number(id))) {
+      try { tabs.push(await chrome.tabs.get(Number(id))); } catch (_) { /* closed */ }
+    }
+  }
+  return tabs;
+}
+const webModeCache = new Map();
+async function webAppState(tab, windows = null) {
+  let standalone = false, focused = true;
+  try {
+    const key = tab.id + ':' + tab.url;
+    if (!webModeCache.has(key)) {
+    const result = await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () =>
+      ['standalone', 'minimal-ui', 'window-controls-overlay'].some(mode => matchMedia('(display-mode: ' + mode + ')').matches)});
+    if (webModeCache.size >= 500) webModeCache.delete(webModeCache.keys().next().value);
+    webModeCache.set(key, result[0]?.result === true);
+    }
+    standalone = webModeCache.get(key);
+    if (windows && windows.has(tab.windowId)) focused = windows.get(tab.windowId);
+    else {
+      focused = (await chrome.windows.get(tab.windowId)).focused;
+      if (windows) windows.set(tab.windowId, focused);
+    }
+  } catch (_) { /* unobservable windows are never closed */ }
+  return {standalone, windowFocused: focused};
 }
 function tabPriority(tab, setting) {
   return setting && setting.url === tab.url && Number.isInteger(setting.priority) &&
@@ -16,7 +46,7 @@ function tabPriority(tab, setting) {
 }
 function eligible({tab, setting}) {
   return tabPriority(tab, setting) > 0 && typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) &&
-    !tab.active && !tab.pinned && !tab.audible && !tab.discarded && !tab.incognito;
+    (!tab.active || (!!tab.standalone && !tab.windowFocused)) && !tab.pinned && !tab.audible && !tab.discarded && !tab.incognito;
 }
 // The agent now owns AI selection, verification and learning. No independent discards.
 async function cycle() { await syncWindow(); }
@@ -37,6 +67,14 @@ chrome.tabs.onRemoved.addListener(async id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
+  if (message.type === 'web-app-mode' && sender.tab) {
+    chrome.storage.session.get('standaloneTabs').then(data => {
+      const values = data.standaloneTabs || {};
+      if (message.standalone === true) values[sender.tab.id] = true; else delete values[sender.tab.id];
+      return chrome.storage.session.set({standaloneTabs: values});
+    }).catch(() => {});
+    return;
+  }
   if (message.type === 'test-connection') {
     chrome.runtime.sendNativeMessage(HOST, {type: 'status'}).then(respond, error => respond({error: error.message}));
     return true;
@@ -78,45 +116,56 @@ async function syncWindow() {
   syncing = true;
   try {
     const [profile, tabs, session] = await Promise.all([
-      profileId(), chrome.tabs.query({}), chrome.storage.session.get(['tabPriorities', 'tabIdentities'])
+      profileId(), allTabs(), chrome.storage.session.get(['tabPriorities', 'tabIdentities'])
     ]);
     const priorities = session.tabPriorities || {};
     const old = session.tabIdentities || {};
     const identities = {};
     const entries = [];
+    const windowFocus = new Map();
     for (const tab of tabs.filter(t => !t.incognito).slice(0, 500)) {
       const previous = old[tab.id];
       const identity = previous && previous.url === tab.url ? previous : {url: tab.url || '', token: crypto.randomUUID()};
       identities[tab.id] = identity;
+      const webApp = await webAppState(tab, windowFocus);
       const setting = priorities[tab.id];
       const value = typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) ? tabPriority(tab, setting) : 0;
       entries.push({id: tab.id, token: identity.token, title: (tab.title || '제목 없는 탭').slice(0, 160),
-        favicon: await cachedFavicon(tab.url), priority: value, active: !!tab.active, pinned: !!tab.pinned, audible: !!tab.audible,
+        favicon: await cachedFavicon(tab.url), priority: value, standalone: webApp.standalone, windowFocused: webApp.windowFocused, active: !!tab.active, pinned: !!tab.pinned, audible: !!tab.audible,
         discarded: !!tab.discarded, supported: typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url)});
     }
     await chrome.storage.session.set({tabIdentities: identities});
-    if (bridge) bridge.postMessage({type: 'sync', profile, tabs: entries});
+    if (bridge) bridge.postMessage({type: 'sync', build: '2026.11.25.3', profile, tabs: entries});
   } finally { syncing = false; }
 }
 async function applyCommands(commands) {
   if (!Array.isArray(commands)) return;
   for (const cmd of commands) {
     if (!Number.isInteger(cmd.id)) continue;
-    if (cmd.action !== 'discard' && (!Number.isInteger(cmd.priority) || cmd.priority < 0 || cmd.priority > 999)) continue;
+    if (!['discard', 'close_web_app'].includes(cmd.action) && (!Number.isInteger(cmd.priority) || cmd.priority < 0 || cmd.priority > 999)) continue;
     try {
       const tab = await chrome.tabs.get(cmd.id);
       const session = await chrome.storage.session.get(['tabPriorities', 'tabIdentities']);
       const identity = (session.tabIdentities || {})[cmd.id];
       if (!identity || identity.token !== cmd.token || identity.url !== tab.url || tab.incognito ||
           typeof tab.url !== 'string' || !/^https?:\/\//i.test(tab.url)) continue;
+      Object.assign(tab, await webAppState(tab));
       const all = session.tabPriorities || {};
-      if (cmd.action === 'discard') {
+      if (['discard', 'close_web_app'].includes(cmd.action)) {
         if (Date.now() / 1000 > cmd.expires || !eligible({tab, setting: all[cmd.id]})) continue;
         const state = await chrome.runtime.sendNativeMessage(HOST, {type: 'status'});
         const freshTab = await chrome.tabs.get(cmd.id);
+        Object.assign(freshTab, await webAppState(freshTab));
         const freshSettings = await settings();
         if (!state.critical || freshTab.url !== identity.url || !eligible({tab: freshTab, setting: freshSettings[cmd.id]})) continue;
-        await chrome.tabs.discard(cmd.id);
+        if (cmd.action === 'close_web_app') {
+          if (!freshTab.standalone || freshTab.windowFocused) continue;
+          await chrome.tabs.remove(cmd.id);
+        } else {
+          if (freshTab.active) continue;
+          await chrome.tabs.discard(cmd.id);
+        }
+        await chrome.runtime.sendNativeMessage(HOST, {type: 'action-result', profile: await profileId(), id: cmd.id, token: cmd.token, action: cmd.action, result: 'done'});
       } else {
         all[cmd.id] = {url: tab.url, priority: cmd.priority};
         await chrome.storage.session.set({tabPriorities: all});

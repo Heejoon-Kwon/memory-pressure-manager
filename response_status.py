@@ -13,7 +13,8 @@ def tab_counts(base):
         for tab in profile['tabs']:
             if tab['priority'] and tab['supported']:
                 allowed += 1
-                if not any(tab[flag] for flag in ('active', 'pinned', 'audible', 'discarded')):
+                if (not any(tab[flag] for flag in ('pinned', 'audible', 'discarded'))
+                        and (not tab['active'] or (tab.get('standalone') and not tab.get('windowFocused', True)))):
                     eligible += 1
     return {'profiles': len(profiles), 'allowed': allowed, 'eligible': eligible, 'waiting': allowed - eligible}
 
@@ -22,7 +23,7 @@ def explain(apps, settings, unsuccessful_apps, base):
     blocked = []
     for app in apps:
         reason = ResponseAgent.blocked_reason(app, settings, unsuccessful_apps)
-        if reason and reason != 'protected':
+        if app.managed and reason and reason != 'protected':
             blocked.append({'app': app.key, 'reason': reason})
     tabs = tab_counts(base)
     if tabs['eligible']:

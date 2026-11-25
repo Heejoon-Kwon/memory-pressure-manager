@@ -46,9 +46,16 @@ def handle(message):
     if kind == 'sync':
         try:
             from chrome_tabs import sync
-            return {'type': 'sync', 'commands': sync(BASE, message.get('profile'), message.get('tabs'))}
+            return {'type': 'sync', 'commands': sync(BASE, message.get('profile'), message.get('tabs'), message.get('build'))}
         except (ValueError, OSError):
             return {'type': 'sync', 'error': 'sync_failed'}
+    if kind == 'action-result':
+        try:
+            from chrome_tabs import report_action
+            report_action(BASE, message)
+            return {'ok': True}
+        except (ValueError, OSError):
+            return {'ok': False}
     if kind == 'status':
         return status()
     if kind == 'report':

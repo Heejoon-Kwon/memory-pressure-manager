@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Memory Pressure Manager · 탭 메모리 관리",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "메모리 압박 시 사용자가 허용한 탭만 메모리에서 내립니다.",
   "permissions": [
     "tabs",
     "storage",
     "alarms",
     "nativeMessaging",
-    "favicon"
+    "favicon",
+    "scripting"
   ],
   "background": {
     "service_worker": "background.js"
@@ -16,5 +17,21 @@
   "action": {
     "default_title": "Memory Pressure Manager 탭 관리",
     "default_popup": "popup.html"
-  }
+  },
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "web_app_mode.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }

@@ -4,6 +4,8 @@ watch:
   consecutive_samples: 3
   verification_seconds: 25
   cooldown_seconds: 90
+  allow_force_kill: true
+  force_kill_after_seconds: 8
   systemd_oom_preference: true
 openai:
   api_key: ""

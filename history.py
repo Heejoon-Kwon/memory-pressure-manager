@@ -26,3 +26,13 @@ def read_history(database, limit=200):
         skills = db.execute('SELECT scenario, app FROM skills ORDER BY app, scenario').fetchall() if 'skills' in tables else []
         events = db.execute('SELECT timestamp, kind, details FROM history ORDER BY id DESC LIMIT ?', (limit,)).fetchall() if 'history' in tables else []
     return skills, events
+
+
+def read_labels(database):
+    if not database.exists():
+        return {}
+    try:
+        with sqlite3.connect(f'{database.resolve().as_uri()}?mode=ro', uri=True, timeout=3) as db:
+            return dict(db.execute('SELECT id, name FROM app_labels'))
+    except sqlite3.Error:
+        return {}

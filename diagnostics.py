@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from build_info import BUILD
 
 from agents import AnalysisAgent, MIB, ResponseAgent, WatchAgent, priority
 from model_pricing import rates_for, PricingUnavailable
@@ -15,6 +16,8 @@ def inspect(config, priorities, database):
     candidates = ResponseAgent.candidates(apps, priorities)
     sample = WatchAgent().sample()
     result = {
+        'installed_build': BUILD,
+        'diagnostic_source': str(Path(__file__).resolve().parent),
         'api_key_configured': bool(settings.get('api_key') or __import__('os').environ.get('OPENAI_API_KEY')),
         'model': model,
         'monthly_budget_usd': settings.get('monthly_budget_usd', 0),
@@ -24,12 +27,27 @@ def inspect(config, priorities, database):
         'memory_available_percent_now': round(sample.available_percent, 1),
         'memory_psi_some_avg10': sample.some,
         'memory_psi_full_avg10': sample.full,
+        'memory_mechanisms': {
+            'psi_available': Path('/proc/pressure/memory').is_file(),
+            'zram_devices': [p.name for p in Path('/sys/block').glob('zram*')],
+            'cgroup_v2_available': Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
+        },
         'detected_apps': [{'name': a.name, 'memory_mib': round(a.rss / MIB),
                            'priority': priority(a.key, priorities),
                            'leader_count': len(a.leaders), 'eligible': a in candidates,
                            'blocked_reason': ResponseAgent.blocked_reason(a, priorities)} for a in apps],
         'skills_count': None, 'recent_events': [],
     }
+    runtime = Path(__import__('os').environ.get('XDG_RUNTIME_DIR') or __import__('os').environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'probe'
+    try:
+        state = json.loads((runtime / 'status.json').read_text())
+        result['running_instance'] = {k: state.get(k) for k in ('build', 'source_dir', 'pid', 'timestamp', 'status', 'ai_status')}
+        result['running_build_matches'] = state.get('build') == BUILD
+    except (ValueError, OSError):
+        result['running_instance'] = None
+    from chrome_tabs import snapshots
+    profiles = snapshots(runtime)
+    result['chrome_profiles'] = [{'build': p.get('build'), 'tabs': len(p['tabs']), 'web_apps': sum(t.get('standalone', False) for t in p['tabs'])} for p in profiles]
     try:
         rates_for(model)
         result['model_pricing'] = 'available'

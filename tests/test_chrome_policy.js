@@ -29,4 +29,16 @@ assert.equal(eligible({tab:{...tab,url:'chrome://settings/'},setting:{url:'chrom
   await applyCommands([{id: 1, token: 'session-a', priority: 500}]);
   await applyCommands([{id: 1, token: 'session-a', action: 'discard', expires: 0}]);
   assert.deepEqual(discarded, [1]);
+  chrome.storage.local = {get: async () => ({probeProfileId:'11111111-1111-4111-8111-111111111111'})};
+  chrome.scripting = {executeScript: async () => [{result:true}]};
+  let focused = false;
+  chrome.windows = {get: async () => ({focused})};
+  let closed = [];
+  chrome.tabs.remove = async id => closed.push(id);
+  tab.active = true;
+  await applyCommands([{id:1,token:'session-a',action:'close_web_app',expires:Date.now()/1000+10}]);
+  assert.deepEqual(closed,[1]);
+  focused = true;
+  await applyCommands([{id:1,token:'session-a',action:'close_web_app',expires:Date.now()/1000+10}]);
+  assert.deepEqual(closed,[1]);
 })().catch(error => {console.error(error); process.exitCode = 1;});
