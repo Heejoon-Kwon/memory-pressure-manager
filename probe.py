@@ -334,6 +334,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='config.yml')
     parser.add_argument('--diagnose', action='store_true', help='민감정보 없이 설정 및 대응 조건 확인 (API 호출 없음)')
+    parser.add_argument('--check-ai', action='store_true', help='예산 안에서 소액 OpenAI 테스트 호출; 앱 종료 없음')
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     os.umask(0o077)
@@ -347,6 +348,33 @@ def main():
             if st.st_uid != os.getuid() or st.st_mode & 0o077:
                 parser.error('설정 파일 권한을 chmod 600으로 바꾸세요')
             config = yaml.safe_load(file) or {}
+    if args.check_ai:
+        ai = config.get('openai', {})
+        budget = Budget(STATE / 'probe.sqlite3', round(float(ai.get('monthly_budget_usd', 0)) * 1_000_000))
+        advisor = Advisor(ai, budget)
+        if not advisor.enabled:
+            print('AI 테스트 불가: API 키와 0보다 큰 월 예산을 확인하세요.')
+            raise SystemExit(1)
+        before = budget.monthly()
+        initialize(STATE / 'probe.sqlite3')
+        try:
+            result = advisor.advise({'available_mib': 1024, 'total_mib': 16384},
+                                    [{'id': 'test_app', 'rss_mib': 256}])
+            if result not in ('none', 'test_app'):
+                raise ValueError('AI 응답 형식 오류')
+        except Exception as exc:
+            record(STATE / 'probe.sqlite3', 'ai_test_failed', {'model': advisor.model, 'error': type(exc).__name__})
+            print('AI 테스트 실패:', type(exc).__name__)
+            print('키 값은 출력하지 않습니다. 위 오류 유형과 서비스 로그를 확인하세요.')
+            raise SystemExit(1)
+        after = budget.monthly()
+        record(STATE / 'probe.sqlite3', 'ai_test_success', {'model': advisor.model})
+        print('AI API 테스트 성공 · 모델:', advisor.model)
+        print('테스트 응답:', result, '· 앱 종료 없음')
+        print('이번 달 로컬 추정 사용액: $%.6f (테스트 전 $%.6f)' %
+              (after['estimated_microusd'] / 1e6, before['estimated_microusd'] / 1e6))
+        print('실제 청구액은 로컬 추정치와 다를 수 있습니다.')
+        return
     if args.diagnose:
         from diagnostics import inspect
         result = inspect(config, overrides(), STATE / 'probe.sqlite3')

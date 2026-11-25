@@ -88,7 +88,9 @@ def event_text(kind, details):
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
-              'no_candidates': '자동 종료 가능한 앱 없음', 'ai_disabled': 'AI 분석 사용 불가'}
+              'no_candidates': '자동 종료 가능한 앱 없음', 'ai_disabled': 'AI 분석 사용 불가',
+              'tab_discarded': 'Chrome 탭 메모리 회수', 'tab_failed': 'Chrome 탭 메모리 회수 실패',
+              'ai_test_success': 'AI 연결 테스트 성공', 'ai_test_failed': 'AI 연결 테스트 실패'}
     lines = []
     if kind == 'ai_request':
         memory = details.get('memory', {})
@@ -96,6 +98,12 @@ def event_text(kind, details):
         lines.append('후보: ' + ', '.join(f"{app_name(x.get('id'))} ({x.get('rss_mib', '?')} MiB)" for x in details.get('candidates', [])))
     elif kind == 'ai_proposal':
         lines.append('제안: ' + ('종료 보류' if details.get('app') == 'none' else app))
+    elif kind in ('ai_test_success', 'ai_test_failed'):
+        lines.append('모델: ' + details.get('model', '알 수 없음'))
+        if 'error' in details:
+            lines.append('오류 유형: ' + details['error'])
+    elif kind in ('tab_discarded', 'tab_failed'):
+        lines.append('탭 제목과 주소는 기록하지 않습니다.')
     elif kind == 'no_candidates':
         lines.append('종료 허용 우선순위, 앱 인식 여부와 단일 실행 여부를 확인하세요.')
     elif kind == 'ai_disabled':
