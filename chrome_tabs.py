@@ -1,4 +1,6 @@
 """Private local exchange between Chrome native bridge and the GTK window."""
+import base64
+import struct
 import fcntl
 import json
 import os
@@ -45,7 +47,18 @@ def clean_tabs(tabs):
         if (type(ident) is not int or ident < 0 or not valid_profile(token)
                 or not isinstance(title, str) or type(prio) is not int or not 0 <= prio <= 999):
             raise ValueError('invalid tab metadata')
-        result.append({'id': ident, 'token': token, 'title': title[:160], 'priority': prio,
+        favicon = item.get('favicon', '')
+        if not isinstance(favicon, str) or len(favicon) > 22000:
+            favicon = ''
+        if favicon:
+            try:
+                raw = base64.b64decode(favicon, validate=True)
+                if (len(raw) < 24 or not raw.startswith(b'\x89PNG\r\n\x1a\n')
+                        or max(struct.unpack('>II', raw[16:24])) > 64):
+                    favicon = ''
+            except (ValueError, struct.error):
+                favicon = ''
+        result.append({'favicon': favicon, 'id': ident, 'token': token, 'title': title[:160], 'priority': prio,
                        'active': item.get('active') is True, 'pinned': item.get('pinned') is True,
                        'audible': item.get('audible') is True, 'discarded': item.get('discarded') is True,
                        'supported': item.get('supported') is True})

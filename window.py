@@ -11,7 +11,8 @@ from pathlib import Path
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, GLib, Gtk, Gio, GdkPixbuf, Pango
+import base64
 from history import read_history
 from priorities import read_priorities
 from chrome_tabs import snapshots, enqueue
@@ -21,18 +22,34 @@ STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') /
 RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME')
                or Path.home() / '.cache') / 'probe'
 CSS = b'''
-window { background: #000; color: #fff; }
+window { background: #000; color: #f5f5f5; font-family: sans-serif; }
+headerbar { background: #000; background-image: none; border: none; box-shadow: none; color: #eee; }
+headerbar button { background: transparent; background-image: none; border: none; box-shadow: none; }
 .title { font-size: 22px; font-weight: 700; }
-.eyebrow { font-size: 12px; font-weight: 700; color: #b0b0b0; }
-.muted { color: #bcbcbc; }
-.frame { background: #111; border: 1px solid #303030; border-radius: 12px; padding: 14px; }
-viewport, list { background: #000; }
-row { border-bottom: 1px solid #252525; }
-combobox button { color: #fff; background: #171717; background-image: none;
- border: 1px solid #404040; box-shadow: none; border-radius: 7px; padding: 5px 8px; }
-combobox button:hover { background: #292929; }
-.history-button { color: #fff; background: #171717; background-image: none; border: 1px solid #555; border-radius: 9px; padding: 10px; box-shadow: none; }
-.history-button:hover { background: #292929; }
+.eyebrow { font-size: 11px; font-weight: 700; color: #999; letter-spacing: 1px; }
+.muted { color: #929292; font-size: 11px; }
+.metric { font-size: 42px; font-weight: 700; letter-spacing: -1px; }
+.stat { font-size: 14px; font-weight: 600; }
+.frame { background: #0d0d0d; border: 1px solid #292929; border-radius: 12px; padding: 12px; }
+viewport, list, scrolledwindow { background: #000; }
+row { background: #101010; border: 1px solid #292929; border-radius: 12px; margin-bottom: 8px; padding: 12px; }
+row:hover { background: #151515; }
+.app-name { color: #f5f5f5; font-size: 13px; font-weight: 600; }
+.memory { color: #f5f5f5; font-size: 13px; font-weight: 600; }
+.badge { font-size: 11px; color: #ddd; background: #202020; padding: 4px 8px; border-radius: 10px; }
+button { background: #101010; background-image: none; color: #ddd; border: 1px solid #383838; border-radius: 7px; box-shadow: none; }
+button:hover { background: #242424; }
+button:checked { color: #000; background: #eee; border-color: #eee; }
+.filter button { padding: 5px 15px; border-radius: 7px; }
+.protect { padding: 4px 9px; font-size: 11px; }
+spinbutton { background: #080808; color: #eee; border: 1px solid #383838; border-radius: 6px; }
+spinbutton entry { background: transparent; border: none; color: #fff; padding: 3px; min-width: 36px; }
+spinbutton button { border: none; border-radius: 0; padding: 2px; }
+entry { color: #eee; background: #101010; border: 1px solid #333; border-radius: 8px; min-height: 20px; padding: 5px; box-shadow: none; }
+progressbar trough { background: #292929; min-height: 5px; border: none; border-radius: 4px; }
+progressbar progress { background: #eee; min-height: 5px; border: none; border-radius: 4px; }
+.history-button { padding: 9px; border-radius: 8px; }
+scrollbar { background: #000; } scrollbar slider { background: #444; min-width: 4px; }
 '''
 
 
@@ -138,12 +155,12 @@ def event_text(kind, details):
 
 class HistoryWindow(Gtk.Window):
     def __init__(self, parent):
-        super().__init__(title='Probe · 대응 기록', transient_for=parent)
-        self.set_default_size(650, 650)
+        super().__init__(title='Memora · 대응 기록', transient_for=parent)
+        self.set_default_size(450, 760)
         self.set_border_width(22)
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.add(root)
-        root.pack_start(label('PROBE', 'eyebrow'), False, False, 0)
+        root.pack_start(label('MEMORA', 'eyebrow'), False, False, 0)
         root.pack_start(label('AI 제안과 대응 기록', 'title'), False, False, 0)
         note = label('기록은 이 기기에만 저장됩니다. 최근 2,000건까지 보관하고 최신 200건을 표시합니다.', 'muted')
         note.set_line_wrap(True)
@@ -161,8 +178,12 @@ class HistoryWindow(Gtk.Window):
     def card(self, title, body):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         box.get_style_context().add_class('frame')
-        box.pack_start(label(title), False, False, 0)
+        heading = label(title)
+        heading.set_line_wrap(True)
+        heading.set_max_width_chars(38)
+        box.pack_start(heading, False, False, 0)
         text = label(body, 'muted')
+        text.set_max_width_chars(42)
         text.set_line_wrap(True)
         text.set_selectable(True)
         box.pack_start(text, False, False, 0)
@@ -189,229 +210,343 @@ class HistoryWindow(Gtk.Window):
                 except (ValueError, TypeError, KeyError, OverflowError):
                     continue
         except (sqlite3.Error, OSError):
-            self.card('기록을 불러올 수 없습니다', 'Probe가 실행 중인지 확인한 뒤 다시 시도하세요.')
+            self.card('기록을 불러올 수 없습니다', 'Memora가 실행 중인지 확인한 뒤 다시 시도하세요.')
         self.content.show_all()
+
+
+APP_ICONS = {
+    'chrome': ('google-chrome', 'chromium', 'web-browser'), 'chromium': ('chromium', 'web-browser'),
+    'idea': ('intellij-idea', 'jetbrains-idea', 'com.jetbrains.IntelliJ-IDEA-Community', 'applications-development'),
+    'code': ('com.visualstudio.code', 'code', 'visual-studio-code', 'applications-development'),
+    'datagrip': ('datagrip', 'jetbrains-datagrip', 'applications-development'),
+    'slack': ('slack', 'com.slack.Slack', 'internet-chat'), 'firefox': ('firefox', 'web-browser'),
+    'discord': ('discord', 'internet-chat'), 'edge': ('microsoft-edge', 'web-browser'),
+    'pycharm': ('pycharm', 'applications-development'), 'webstorm': ('webstorm', 'applications-development'),
+}
+
+
+_desktop_icons = None
+
+
+def app_icon(key):
+    global _desktop_icons
+    if _desktop_icons is None:
+        _desktop_icons = {}
+        names = {'idea': 'intellij', 'code': 'visual studio code', 'datagrip': 'datagrip',
+                 'slack': 'slack', 'chrome': 'google chrome', 'firefox': 'firefox',
+                 'pycharm': 'pycharm', 'webstorm': 'webstorm', 'discord': 'discord'}
+        for app in Gio.AppInfo.get_all():
+            title = app.get_name().casefold()
+            for ident, match in names.items():
+                if match in title and app.get_icon():
+                    _desktop_icons[ident] = app.get_icon()
+    if key in _desktop_icons:
+        image = Gtk.Image.new_from_gicon(_desktop_icons[key], Gtk.IconSize.DIALOG)
+        image.set_pixel_size(30)
+        return image
+    bundled = {'idea': 'intellij-idea.svg', 'datagrip': 'datagrip.svg', 'code': 'code.svg', 'slack': 'slack.svg'}.get(key)
+    if bundled:
+        path = Path(__file__).parent / 'assets' / bundled
+        if path.is_file():
+            return Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 30, 30, True))
+    theme = Gtk.IconTheme.get_default()
+    for name in APP_ICONS.get(key, (key, 'application-x-executable')):
+        if theme.has_icon(name):
+            image = Gtk.Image.new_from_icon_name(name, Gtk.IconSize.DIALOG)
+            image.set_pixel_size(30)
+            return image
+    return Gtk.Image.new_from_icon_name('application-x-executable', Gtk.IconSize.LARGE_TOOLBAR)
+
+
+def set_favicon(image, data):
+    if not data:
+        return
+    try:
+        raw = base64.b64decode(data, validate=True)
+        if len(raw) > 16384 or not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+            return
+        loader = GdkPixbuf.PixbufLoader.new_with_type('png')
+        loader.set_size(28, 28)
+        loader.write(raw)
+        loader.close()
+        image.set_from_pixbuf(loader.get_pixbuf())
+    except (ValueError, GLib.Error):
+        pass
 
 
 class Window(Gtk.Window):
     def __init__(self):
-        super().__init__(title='Probe')
-        self.set_default_size(650, 620)
-        self.set_border_width(22)
-        self.connect('destroy', Gtk.main_quit)
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        super().__init__(title='Memora · 메모리 관리')
+        self.set_default_size(440, 840)
+        self.set_size_request(390, 560)
+        self.connect('destroy', self.destroyed)
+        bar = Gtk.HeaderBar(show_close_button=True)
+        bar.set_title('Memora')
+        bar.set_decoration_layout('icon:minimize,close')
+        self.set_titlebar(bar)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                       margin_start=16, margin_end=16, margin_top=8, margin_bottom=14)
         self.add(root)
-        root.pack_start(label('PROBE', 'eyebrow'), False, False, 0)
-        root.pack_start(label('앱 보호와 종료 순서', 'title'), False, False, 0)
-        summary = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        summary.get_style_context().add_class('frame')
-        self.metrics = label()
-        self.note = label(style='muted')
+        top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        line = Gtk.Box(spacing=10)
+        line.pack_start(label('메모리', 'eyebrow'), True, True, 0)
+        self.health = label('연결 확인 중', 'badge')
+        line.pack_end(self.health, False, False, 0)
+        top.pack_start(line, False, False, 0)
+        self.metrics = label('—', 'metric')
+        top.pack_start(self.metrics, False, False, 0)
+        self.ram_bar = Gtk.ProgressBar()
+        top.pack_start(self.ram_bar, False, False, 0)
+        stats = Gtk.Box(spacing=12, homogeneous=True)
+        self.available = self.stat_cell(stats, '사용 가능')
+        self.swap = self.stat_cell(stats, '스왑 사용')
+        self.cost = self.stat_cell(stats, '이번 달 API')
+        self.cost.set_tooltip_text('로컬 추정 비용 · 실제 API 청구액과 다를 수 있습니다')
+        top.pack_start(stats, False, False, 3)
+        root.pack_start(top, False, False, 0)
+        state = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        state.get_style_context().add_class('frame')
+        self.note = label('메모리 상태 확인 중', 'muted')
         self.note.set_line_wrap(True)
-        summary.pack_start(self.metrics, False, False, 0)
-        summary.pack_start(self.note, False, False, 0)
-        root.pack_start(summary, False, False, 0)
-        guide = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        guide.get_style_context().add_class('frame')
-        for text in ('보호 · Probe가 종료하지 않으며 시스템 보호를 시도합니다.',
-                     '우선순위 1~999 · 숫자가 낮을수록 중요합니다. 숫자가 큰 앱부터 종료를 요청합니다.',
-                     '같은 숫자는 허용됩니다. 운영체제의 강제 종료까지 막을 수는 없습니다.'):
-            item = label(text, 'muted');item.set_line_wrap(True);guide.pack_start(item, False, False, 0)
-        root.pack_start(guide, False, False, 0)
-        root.pack_start(label('메모리를 사용하는 앱', 'eyebrow'), False, False, 0)
+        self.ai_note = label('AI 연결 상태 확인 중', 'muted')
+        self.ai_note.set_line_wrap(True)
+        state.pack_start(self.note, False, False, 0)
+        state.pack_start(self.ai_note, False, False, 0)
+        root.pack_start(state, False, False, 0)
+        filters = Gtk.Box(spacing=4)
+        filters.get_style_context().add_class('filter')
+        group = None
+        for key, text in (('all', '전체'), ('apps', '앱'), ('tabs', 'Chrome 탭')):
+            button = Gtk.RadioButton.new_with_label_from_widget(group, text)
+            button.set_mode(False)
+            if group is None:
+                group = button
+            button.connect('toggled', self.filter_changed, key)
+            filters.pack_start(button, True, True, 0)
+        self.filter = 'all'
+        root.pack_start(filters, False, False, 0)
+        self.search = Gtk.SearchEntry(placeholder_text='앱 이름 또는 탭 제목 검색')
+        self.search.connect('search-changed', lambda *_: self.apply_filter())
+        root.pack_start(self.search, False, False, 0)
         self.rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.tab_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.tab_status = label('Chrome 탭 연결 확인 중', 'muted')
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        content.pack_start(self.rows, False, False, 0)
-        content.pack_start(label('CHROME 탭', 'eyebrow'), False, False, 8)
-        content.pack_start(self.tab_status, False, False, 0)
-        content.pack_start(self.tab_rows, False, False, 0)
+        self.rows.set_sort_func(lambda a, b: (a.sort_key > b.sort_key) - (a.sort_key < b.sort_key))
+        self.apps_heading = label('앱', 'eyebrow')
+        self.tabs_heading = label('CHROME 탭', 'eyebrow')
+        self.tab_status = label('Chrome 연결 확인 중', 'muted')
+        self.tab_status.set_line_wrap(True)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        for child in (self.apps_heading, self.rows, self.tabs_heading, self.tab_status, self.tab_rows):
+            content.pack_start(child, False, False, 0)
         scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.add(content)
         root.pack_start(scroll, True, True, 0)
-        caption = label('자동 종료 요청은 저장하지 않은 작업을 잃게 할 수 있습니다.', 'muted')
-        caption.set_line_wrap(True)
-        root.pack_start(caption, False, False, 0)
-        history_button = Gtk.Button(label='AI 제안 · 스킬 · 대응 기록 보기')
-        history_button.get_style_context().add_class('history-button')
-        history_button.connect('clicked', self.show_history)
-        root.pack_start(history_button, False, False, 0)
+        help_text = label('숫자가 작을수록 중요 · 보호를 켜면 자동 정리 제외', 'muted')
+        help_text.set_line_wrap(True)
+        root.pack_start(help_text, False, False, 0)
+        self.history_button = Gtk.Button(label='대응 기록 · 저장된 스킬')
+        self.history_button.get_style_context().add_class('history-button')
+        self.history_button.connect('clicked', self.show_history)
+        root.pack_start(self.history_button, False, False, 0)
         self.history_window = None
-        self.entries = {}
-        self.tabs = {}
-        self.tab_pending = {}
+        self.entries, self.tabs, self.tab_pending = {}, {}, {}
         self.render()
-        GLib.timeout_add_seconds(3, self.render)
+        self.timer = GLib.timeout_add_seconds(3, self.render)
+
+    def destroyed(self, *_):
+        if getattr(self, 'timer', None):
+            GLib.source_remove(self.timer)
+        Gtk.main_quit()
+
+    @staticmethod
+    def stat_cell(parent, caption):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        box.pack_start(label(caption, 'muted'), False, False, 0)
+        value = label('—', 'stat')
+        box.pack_start(value, False, False, 0)
+        parent.pack_start(box, True, True, 0)
+        return value
+
+    def filter_changed(self, button, key):
+        if button.get_active():
+            self.filter = key
+            if hasattr(self, 'entries'):
+                self.apply_filter()
+
+    def apply_filter(self):
+        query = self.search.get_text().casefold().strip()
+        for entries, section in ((self.entries, 'apps'), (self.tabs, 'tabs')):
+            for entry in entries.values():
+                entry['row'].set_visible(self.filter in ('all', section) and query in entry['name'].casefold())
+        self.apps_heading.set_visible(self.filter != 'tabs')
+        self.tabs_heading.set_visible(self.filter != 'apps')
+        self.tab_status.set_visible(self.filter != 'apps')
 
     def show_history(self, *_):
         if self.history_window is None:
             self.history_window = HistoryWindow(self)
-            self.history_window.connect('destroy', self.history_closed)
+            self.history_window.connect('destroy', lambda *_: setattr(self, 'history_window', None))
             self.history_window.show_all()
         else:
             self.history_window.refresh()
             self.history_window.present()
 
-    def history_closed(self, *_):
-        self.history_window = None
+    def create_row(self, name, icon, value, callback, key):
+        row = Gtk.ListBoxRow()
+        row.sort_key = (0, name)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        row.add(box)
+        top = Gtk.Box(spacing=10)
+        top.pack_start(icon, False, False, 0)
+        title = label(name, 'app-name')
+        title.set_ellipsize(Pango.EllipsizeMode.END)
+        title.set_max_width_chars(25)
+        title.set_hexpand(True)
+        top.pack_start(title, True, True, 0)
+        memory = label('', 'memory')
+        top.pack_end(memory, False, False, 0)
+        box.pack_start(top, False, False, 0)
+        bottom = Gtk.Box(spacing=8)
+        protect = Gtk.ToggleButton(label='보호')
+        protect.get_style_context().add_class('protect')
+        protect.set_tooltip_text('자동 종료와 탭 회수에서 제외')
+        protect.set_active(value == 0)
+        number = Gtk.SpinButton.new_with_range(1, 999, 1)
+        number.set_numeric(True)
+        number.set_width_chars(3)
+        number.set_value(value or 500)
+        number.set_sensitive(value != 0)
+        number.set_tooltip_text('1~999 · 숫자가 클수록 먼저 정리')
+        bottom.pack_start(protect, False, False, 0)
+        bottom.pack_start(number, False, False, 0)
+        detail = label('', 'muted')
+        detail.set_ellipsize(Pango.EllipsizeMode.END)
+        detail.set_max_width_chars(22)
+        bottom.pack_end(detail, True, True, 0)
+        box.pack_start(bottom, False, False, 0)
+        entry = dict(row=row, title=title, memory=memory, protect=protect, number=number,
+                     detail=detail, icon=icon, name=name)
+        entry['handlers'] = (protect.connect('toggled', callback, key), number.connect('value-changed', callback, key))
+        return entry
+
+    @staticmethod
+    def update_controls(entry, value, supported=True):
+        protect, number = entry['protect'], entry['number']
+        if protect.has_focus() or number.has_focus():
+            return
+        protect.handler_block(entry['handlers'][0])
+        number.handler_block(entry['handlers'][1])
+        protect.set_active(value == 0)
+        if value:
+            number.set_value(value)
+        protect.set_sensitive(supported)
+        number.set_sensitive(supported and value != 0)
+        protect.handler_unblock(entry['handlers'][0])
+        number.handler_unblock(entry['handlers'][1])
 
     def changed(self, widget, key):
-        row, memory, protect, number, reason_label = self.entries[key]
-        number.set_sensitive(not protect.get_active())
+        entry = self.entries[key]
+        entry['number'].set_sensitive(not entry['protect'].get_active())
         try:
-            update_priority(key, 0 if protect.get_active() else number.get_value_as_int())
+            update_priority(key, 0 if entry['protect'].get_active() else entry['number'].get_value_as_int())
         except OSError:
-            self.note.set_text('우선순위를 저장할 수 없습니다. Probe가 실행 중인지 확인하세요.')
-
-    def add_app(self, item):
-        key = item['id']
-        row = Gtk.ListBoxRow()
-        line = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8)
-        row.add(line)
-        details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        details.pack_start(label(item['name']), False, False, 0)
-        reason_label = label(style='muted')
-        details.pack_start(reason_label, False, False, 0)
-        line.pack_start(details, True, True, 0)
-        memory = label(style='muted')
-        line.pack_start(memory, False, False, 0)
-        protect = Gtk.CheckButton(label='보호')
-        number = Gtk.SpinButton.new_with_range(1, 999, 1)
-        number.set_numeric(True)
-        number.set_width_chars(4)
-        value = item['priority']
-        protect.set_active(value == 0)
-        number.set_value(value if value else 500)
-        number.set_sensitive(value != 0)
-        line.pack_end(number, False, False, 0)
-        line.pack_end(protect, False, False, 0)
-        self.rows.add(row)
-        self.entries[key] = (row, memory, protect, number, reason_label)
-        protect.connect('toggled', self.changed, key)
-        number.connect('value-changed', self.changed, key)
-        row.show_all()
+            self.note.set_text('설정 저장 실패 · 실행 상태를 확인하세요')
 
     def tab_changed(self, widget, key):
-        row, title, flags, protect, number, profile, token, tab_id = self.tabs[key]
-        number.set_sensitive(not protect.get_active())
-        value = 0 if protect.get_active() else number.get_value_as_int()
+        entry = self.tabs[key]
+        entry['number'].set_sensitive(not entry['protect'].get_active())
+        value = 0 if entry['protect'].get_active() else entry['number'].get_value_as_int()
         try:
-            enqueue(RUNTIME, profile, tab_id, token, value)
+            enqueue(RUNTIME, key[0], key[1], key[2], value)
             self.tab_pending[key] = (value, time.monotonic() + 12)
-            flags.set_text('설정 전달 중…')
+            entry['detail'].set_text('저장 중…')
         except (OSError, ValueError):
-            flags.set_text('설정 실패 · Chrome 연결을 확인하세요')
-
-    def add_tab(self, profile, item):
-        tab_id = item['id']
-        key = (profile, tab_id, item['token'])
-        row = Gtk.ListBoxRow()
-        line = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8)
-        row.add(line)
-        details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title = label(item['title'])
-        title.set_ellipsize(3)
-        title.set_max_width_chars(42)
-        flags = label(style='muted')
-        details.pack_start(title, False, False, 0)
-        details.pack_start(flags, False, False, 0)
-        line.pack_start(details, True, True, 0)
-        protect = Gtk.CheckButton(label='보호')
-        number = Gtk.SpinButton.new_with_range(1, 999, 1)
-        number.set_numeric(True)
-        number.set_width_chars(4)
-        value = item['priority']
-        protect.set_active(value == 0)
-        number.set_value(value or 500)
-        protect.set_sensitive(item['supported'])
-        number.set_sensitive(item['supported'] and value != 0)
-        line.pack_end(number, False, False, 0)
-        line.pack_end(protect, False, False, 0)
-        self.tab_rows.add(row)
-        self.tabs[key] = (row, title, flags, protect, number, profile, item['token'], tab_id)
-        protect.connect('toggled', self.tab_changed, key)
-        number.connect('value-changed', self.tab_changed, key)
-        row.show_all()
+            entry['detail'].set_text('Chrome 연결 확인 필요')
 
     def render_tabs(self):
         try:
             profiles = snapshots(RUNTIME)
         except (OSError, ValueError):
             profiles = []
-        self.tab_status.set_text(f'연결된 Chrome 프로필 {len(profiles)}개 · 탭은 메모리에서만 내립니다'
-                                 if profiles else 'Chrome 확장 연결 대기 중 · 확장을 다시 로드하세요')
-        items = [(p['profile'], item) for p in profiles for item in p['tabs']]
-        keys = {(profile, item['id'], item['token']) for profile, item in items}
+        items = [(p['profile'], t) for p in profiles for t in p['tabs']]
+        self.tabs_heading.set_text(f'CHROME 탭  {len(items)}')
+        self.tab_status.set_text(f'{len(profiles)}개 프로필 연결 · 탭별 메모리는 Chrome이 제공하지 않습니다'
+                                 if profiles else 'Chrome 확장을 연결하면 열린 탭이 여기에 표시됩니다')
+        keys = {(p, t['id'], t['token']) for p, t in items}
         for key in self.tabs.keys() - keys:
-            self.tab_rows.remove(self.tabs.pop(key)[0])
+            self.tab_rows.remove(self.tabs.pop(key)['row'])
             self.tab_pending.pop(key, None)
         for profile, item in items:
             key = (profile, item['id'], item['token'])
             if key not in self.tabs:
-                self.add_tab(profile, item)
-            row, title, flags, protect, number, _, _, _ = self.tabs[key]
-            title.set_text(item['title'])
+                self.tabs[key] = self.create_row(item['title'], app_icon('chrome'), item['priority'], self.tab_changed, key)
+                self.tabs[key]['favicon'] = None
+                self.tab_rows.add(self.tabs[key]['row'])
+                self.tabs[key]['row'].show_all()
+            entry = self.tabs[key]
+            entry['name'] = item['title']
+            entry['title'].set_text(item['title'])
+            entry['title'].set_tooltip_text(item['title'])
+            if item.get('favicon') and item['favicon'] != entry['favicon']:
+                set_favicon(entry['icon'], item['favicon'])
+                entry['favicon'] = item['favicon']
             pending = self.tab_pending.get(key)
             if pending and (pending[0] == item['priority'] or pending[1] < time.monotonic()):
                 self.tab_pending.pop(key, None)
                 pending = None
-            notes = [name for flag, name in (('active', '사용 중'), ('pinned', '고정'),
-                      ('audible', '소리 재생'), ('discarded', '메모리에서 내려짐')) if item[flag]]
-            if not item['supported']:
-                notes.append('설정 불가')
-            flags.set_text('설정 전달 중…' if pending else
-                           ' · '.join(['프로필 ' + profile[:6], *notes]))
-            if not pending and not number.has_focus() and not protect.has_focus():
-                value = item['priority']
-                protect.handler_block_by_func(self.tab_changed)
-                number.handler_block_by_func(self.tab_changed)
-                protect.set_active(value == 0)
-                if value:
-                    number.set_value(value)
-                protect.set_sensitive(item['supported'])
-                number.set_sensitive(item['supported'] and value != 0)
-                protect.handler_unblock_by_func(self.tab_changed)
-                number.handler_unblock_by_func(self.tab_changed)
+            flags = [name for flag, name in (('active', '사용 중'), ('pinned', '고정'),
+                     ('audible', '소리 재생'), ('discarded', '회수됨')) if item[flag]]
+            entry['memory'].set_text('회수됨' if item['discarded'] else '')
+            entry['detail'].set_text('저장 중…' if pending else ' · '.join(flags or ['프로필 ' + profile[:4]]))
+            if not pending:
+                self.update_controls(entry, item['priority'], item['supported'])
 
     def render(self):
         data = read(RUNTIME / 'status.json')
-        if time.time() - data.get('timestamp', 0) > 75:
-            self.metrics.set_text('Probe 감시가 실행 중이 아닙니다')
-            self.note.set_text('')
+        active = time.time() - data.get('timestamp', 0) <= 75
+        if not active:
+            self.metrics.set_text('— %')
+            self.health.set_text('감시 중지')
+            self.note.set_text('Memora 서비스가 실행 중이 아닙니다')
+            self.ai_note.set_text('서비스를 시작하면 자동 대응을 준비합니다')
+            self.available.set_text('—'); self.swap.set_text('—'); self.cost.set_text('—')
+            self.ram_bar.set_fraction(0)
             data = {}
         else:
-            self.metrics.set_text(f"RAM {data['usage']}%  ·  가용 {data['available_mib'] / 1024:.1f} GiB"
-                                  f"  ·  이번 달 ${data['cost_micro'] / 1e6:.4f}")
-            self.note.set_text(f"{data['status']}  ·  저장된 대응 {data['learned_skills']}개"
-                               f"  ·  systemd 보호 적용 {data['protected_scopes']}개\n"
-                               f"AI: {data.get('ai_status', '서비스 업데이트 필요')}")
+            usage = data['usage']
+            self.metrics.set_text(f'{usage}%')
+            self.health.set_text({'normal': '감시 중', 'warning': '메모리 주의', 'critical': '대응 필요'}.get(data['level'], '감시 중'))
+            self.ram_bar.set_fraction(min(1, max(0, usage / 100)))
+            self.available.set_text(f"{data['available_mib'] / 1024:.1f} GiB")
+            self.swap.set_text(f"{data.get('swap_used_mib', 0) / 1024:.1f} GiB")
+            self.cost.set_text(f"${data['cost_micro'] / 1e6:.4f}")
+            self.note.set_text(data['status'])
+            self.ai_note.set_text('AI · ' + data.get('ai_status', '연결 상태 확인 필요'))
+            self.history_button.set_label(f"대응 기록 보기    ·    저장된 스킬 {data['learned_skills']}")
         saved = read_priorities(STATE / 'priorities.json')
-        items = sorted(data.get('apps', []), key=lambda item: (-item['rss_mib'], item['name']))[:12]
-        current = {item['id'] for item in items}
+        items = data.get('apps', [])
+        self.apps_heading.set_text(f'앱  {len(items)}')
+        current = {t['id'] for t in items}
         for key in self.entries.keys() - current:
-            self.rows.remove(self.entries.pop(key)[0])
+            self.rows.remove(self.entries.pop(key)['row'])
         for item in items:
             key = item['id']
             if key not in self.entries:
-                self.add_app(item)
-            row, memory, protect, number, reason_label = self.entries[key]
-            memory.set_text(f"약 {item['rss_mib']:,} MiB")
-            reason = item.get('blocked_reason')
-            reason_label.set_text(REASONS.get(reason, '') if reason != 'protected' else '')
-            # Do not overwrite edits or emit writes while refreshing.
-            if not number.has_focus() and not protect.has_focus():
-                value = saved.get(key, item['priority'])
-                protect.handler_block_by_func(self.changed)
-                number.handler_block_by_func(self.changed)
-                protect.set_active(value == 0)
-                if value:
-                    number.set_value(value)
-                number.set_sensitive(value != 0)
-                protect.handler_unblock_by_func(self.changed)
-                number.handler_unblock_by_func(self.changed)
-            number.set_tooltip_text(REASONS.get(reason, '숫자가 클수록 먼저 종료를 요청합니다.'))
+                self.entries[key] = self.create_row(item['name'], app_icon(key), item['priority'], self.changed, key)
+                self.rows.add(self.entries[key]['row'])
+                self.entries[key]['row'].show_all()
+            entry = self.entries[key]
+            entry['row'].sort_key = (-item['rss_mib'], item['name'])
+            size = item['rss_mib']
+            entry['memory'].set_text(f'{size / 1024:.1f} GiB' if size >= 1024 else f'{size:,} MiB')
+            reason = REASONS.get(item.get('blocked_reason'), '자동 대응 가능')
+            entry['detail'].set_text(reason)
+            entry['detail'].set_tooltip_text(reason)
+            self.update_controls(entry, saved.get(key, item['priority']))
+        self.rows.invalidate_sort()
         self.render_tabs()
+        self.apply_filter()
         return True
 
 

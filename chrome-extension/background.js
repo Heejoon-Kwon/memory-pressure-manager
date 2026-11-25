@@ -54,6 +54,25 @@ async function profileId() {
   await chrome.storage.local.set({probeProfileId: id});
   return id;
 }
+const faviconCache = new Map();
+async function cachedFavicon(pageUrl) {
+  if (!pageUrl || !/^https?:\/\//i.test(pageUrl)) return '';
+  if (faviconCache.has(pageUrl)) return faviconCache.get(pageUrl);
+  const request = (async () => {
+    try {
+      const url = new URL(chrome.runtime.getURL('/_favicon/'));
+      url.searchParams.set('pageUrl', pageUrl);
+      url.searchParams.set('size', '32');
+      const response = await fetch(url.toString());
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length > 16384 || bytes[0] !== 137 || bytes[1] !== 80) return '';
+      return btoa(String.fromCharCode(...bytes));
+    } catch (_) { return ''; }
+  })();
+  if (faviconCache.size >= 500) faviconCache.delete(faviconCache.keys().next().value);
+  faviconCache.set(pageUrl, request);
+  return request;
+}
 async function syncWindow() {
   if (!bridge || syncing) return;
   syncing = true;
@@ -72,7 +91,7 @@ async function syncWindow() {
       const setting = priorities[tab.id];
       const value = typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) ? tabPriority(tab, setting) : 0;
       entries.push({id: tab.id, token: identity.token, title: (tab.title || '제목 없는 탭').slice(0, 160),
-        priority: value, active: !!tab.active, pinned: !!tab.pinned, audible: !!tab.audible,
+        favicon: await cachedFavicon(tab.url), priority: value, active: !!tab.active, pinned: !!tab.pinned, audible: !!tab.audible,
         discarded: !!tab.discarded, supported: typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url)});
     }
     await chrome.storage.session.set({tabIdentities: identities});

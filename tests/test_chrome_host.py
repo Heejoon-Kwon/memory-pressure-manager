@@ -30,6 +30,14 @@ class NativeHostTests(unittest.TestCase):
             self.assertEqual(chrome_tabs.sync(tmp, profile, tabs), [])
             self.assertNotIn('url', str(chrome_tabs.snapshots(tmp)))
 
+    def test_favicon_metadata_never_accepts_network_urls(self):
+        from chrome_tabs import clean_tabs
+        item = {'id': 1, 'token': '22222222-2222-4222-8222-222222222222',
+                'title': 'Example', 'priority': 500, 'favicon': 'https://example.com/icon.png'}
+        self.assertEqual(clean_tabs([item])[0]['favicon'], '')
+        item['favicon'] = 'a' * 30000
+        self.assertEqual(clean_tabs([item])[0]['favicon'], '')
+
     def test_status_rejects_stale_and_stopped_service(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)):
             (Path(tmp) / 'status.json').write_text(json.dumps({'timestamp': 100, 'level': 'critical'}))

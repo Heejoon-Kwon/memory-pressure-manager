@@ -11,13 +11,13 @@ from pathlib import Path
 
 BASE = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache') / 'probe'
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
-MAX_SIZE = 1024 * 1024
+MAX_SIZE = 12 * 1024 * 1024
 COOLDOWN = 90
 
 
 def service_active():
     try:
-        return subprocess.run(['/usr/bin/systemctl', '--user', 'is-active', '--quiet', 'probe.service'],
+        return subprocess.run(['/usr/bin/systemctl', '--user', 'is-active', '--quiet', 'memora.service', 'probe.service'],
                               timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
