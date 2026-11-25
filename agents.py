@@ -189,10 +189,22 @@ def chrome_tab_management_enabled():
 
 class ResponseAgent:
     @staticmethod
+    def blocked_reason(app, overrides, unsuccessful_apps=()):
+        if not 1 <= priority(app.key, overrides) <= 999:
+            return 'protected'
+        if app.key == 'chrome' and chrome_tab_management_enabled():
+            return 'chrome_tab_mode'
+        if len(app.leaders) != 1:
+            return 'ambiguous_process'
+        if app.rss < 128 * MIB:
+            return 'small_memory'
+        if app.key in unsuccessful_apps:
+            return 'previous_attempt_failed'
+        return None
+
+    @staticmethod
     def candidates(apps, overrides):
-        eligible = [app for app in apps if 1 <= priority(app.key, overrides) <= 999
-                    and not (app.key == 'chrome' and chrome_tab_management_enabled())
-                    and len(app.leaders) == 1 and app.rss >= 128 * MIB]
+        eligible = [app for app in apps if ResponseAgent.blocked_reason(app, overrides) is None]
         return sorted(eligible, key=lambda app: (-priority(app.key, overrides), -app.rss, app.key))
 
     @staticmethod

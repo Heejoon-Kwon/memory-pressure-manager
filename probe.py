@@ -23,6 +23,7 @@ from budget import Budget, BudgetExceeded
 from model_pricing import rates_for
 from history import initialize, record
 from priorities import read_priorities
+from response_status import explain
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -224,6 +225,8 @@ class Probe:
                 if self.protection:
                     self.protection.sync(apps, settings)
             if level == 'normal':
+                if summary.startswith('메모리 압박 · '):
+                    summary = '메모리 감시 중'
                 used_advice = False
                 declined_scenarios.clear()
                 unsuccessful_apps.clear()
@@ -255,8 +258,9 @@ class Probe:
                               if app.key not in unsuccessful_apps]
                 if not candidates:
                     if now >= next_notice:
-                        summary = '메모리 압박 · 종료를 허용한 앱 없음'
-                        self.event('no_candidates', {'memory': snapshot(sample)})
+                        detail = explain(apps, settings, unsuccessful_apps, RUNTIME)
+                        summary = '메모리 압박 · ' + detail['summary']
+                        self.event('no_candidates', {'memory': snapshot(sample), 'blocked': detail['blocked'], 'tabs': detail['tabs']})
                         notify(summary)
                         next_notice = now + self.cooldown
                 else:
@@ -332,7 +336,8 @@ class Probe:
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
                 'timestamp': time.time(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
                 'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
-                                          'eligible': len(a.leaders) == 1, 'priority': priority(a.key, settings)}
+                                          'blocked_reason': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps),
+                                          'eligible': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps) is None, 'priority': priority(a.key, settings)}
                                          for a in apps],
                 'protected_scopes': len(self.protection.applied) if self.protection else 0,
                 'learned_skills': self.skills.count(),

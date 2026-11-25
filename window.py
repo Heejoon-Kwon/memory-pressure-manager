@@ -15,6 +15,7 @@ from gi.repository import Gdk, GLib, Gtk
 from history import read_history
 from priorities import read_priorities
 from chrome_tabs import snapshots, enqueue
+from response_labels import REASONS
 
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
 RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME')
@@ -89,7 +90,7 @@ def event_text(kind, details):
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
-              'no_candidates': '자동 종료 가능한 앱 없음', 'ai_disabled': 'AI 분석 사용 불가',
+              'no_candidates': '현재 앱 종료 후보 없음', 'ai_disabled': 'AI 분석 사용 불가',
               'tab_discarded': 'Chrome 탭 메모리 회수', 'tab_failed': 'Chrome 탭 메모리 회수 실패',
               'ai_test_success': 'AI 연결 테스트 성공', 'ai_test_failed': 'AI 연결 테스트 실패',
               'pressure_warning': '메모리 주의', 'pressure_critical': '메모리 위험'}
@@ -110,7 +111,13 @@ def event_text(kind, details):
     elif kind in ('tab_discarded', 'tab_failed'):
         lines.append('탭 제목과 주소는 기록하지 않습니다.')
     elif kind == 'no_candidates':
-        lines.append('종료 허용 우선순위, 앱 인식 여부와 단일 실행 여부를 확인하세요.')
+        blocked = details.get('blocked', [])
+        tabs = details.get('tabs', {})
+        lines.extend(app_name(item.get('app')) + ': ' + REASONS.get(item.get('reason'), '대기 중') for item in blocked)
+        if tabs.get('profiles'):
+            lines.append(f"Chrome 탭: 회수 가능 {tabs.get('eligible', 0)}개 · 일시 제외 {tabs.get('waiting', 0)}개")
+        if not blocked and not tabs.get('profiles'):
+            lines.append('종료 가능한 앱이 없거나 Chrome 확장이 연결되지 않았습니다.')
     elif kind == 'ai_disabled':
         lines.append({'no_api_key': 'API 키가 설정되지 않았습니다.', 'zero_budget': '월 예산이 0입니다.'}.get(details.get('reason'), '설정을 확인하세요.'))
     elif kind == 'ai_error':
@@ -247,7 +254,7 @@ class Window(Gtk.Window):
         self.history_window = None
 
     def changed(self, widget, key):
-        row, memory, protect, number = self.entries[key]
+        row, memory, protect, number, reason_label = self.entries[key]
         number.set_sensitive(not protect.get_active())
         try:
             update_priority(key, 0 if protect.get_active() else number.get_value_as_int())
@@ -259,7 +266,11 @@ class Window(Gtk.Window):
         row = Gtk.ListBoxRow()
         line = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8)
         row.add(line)
-        line.pack_start(label(item['name']), True, True, 0)
+        details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        details.pack_start(label(item['name']), False, False, 0)
+        reason_label = label(style='muted')
+        details.pack_start(reason_label, False, False, 0)
+        line.pack_start(details, True, True, 0)
         memory = label(style='muted')
         line.pack_start(memory, False, False, 0)
         protect = Gtk.CheckButton(label='보호')
@@ -273,7 +284,7 @@ class Window(Gtk.Window):
         line.pack_end(number, False, False, 0)
         line.pack_end(protect, False, False, 0)
         self.rows.add(row)
-        self.entries[key] = (row, memory, protect, number)
+        self.entries[key] = (row, memory, protect, number, reason_label)
         protect.connect('toggled', self.changed, key)
         number.connect('value-changed', self.changed, key)
         row.show_all()
@@ -381,8 +392,10 @@ class Window(Gtk.Window):
             key = item['id']
             if key not in self.entries:
                 self.add_app(item)
-            row, memory, protect, number = self.entries[key]
+            row, memory, protect, number, reason_label = self.entries[key]
             memory.set_text(f"약 {item['rss_mib']:,} MiB")
+            reason = item.get('blocked_reason')
+            reason_label.set_text(REASONS.get(reason, '') if reason != 'protected' else '')
             # Do not overwrite edits or emit writes while refreshing.
             if not number.has_focus() and not protect.has_focus():
                 value = saved.get(key, item['priority'])
@@ -394,8 +407,7 @@ class Window(Gtk.Window):
                 number.set_sensitive(value != 0)
                 protect.handler_unblock_by_func(self.changed)
                 number.handler_unblock_by_func(self.changed)
-            number.set_tooltip_text('숫자가 클수록 먼저 종료를 요청합니다.'
-                                    if item['eligible'] else '단일 앱 프로세스를 확인할 수 없어 자동 종료 대상에서 제외됩니다.')
+            number.set_tooltip_text(REASONS.get(reason, '숫자가 클수록 먼저 종료를 요청합니다.'))
         self.render_tabs()
         return True
 

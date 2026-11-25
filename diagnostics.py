@@ -26,7 +26,8 @@ def inspect(config, priorities, database):
         'memory_psi_full_avg10': sample.full,
         'detected_apps': [{'name': a.name, 'memory_mib': round(a.rss / MIB),
                            'priority': priority(a.key, priorities),
-                           'leader_count': len(a.leaders), 'eligible': a in candidates} for a in apps],
+                           'leader_count': len(a.leaders), 'eligible': a in candidates,
+                           'blocked_reason': ResponseAgent.blocked_reason(a, priorities)} for a in apps],
         'skills_count': None, 'recent_events': [],
     }
     try:
