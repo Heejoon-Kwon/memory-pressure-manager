@@ -107,3 +107,31 @@ def enqueue(base, profile, tab_id, token, value):
         commands = [x for x in commands if isinstance(x, dict) and x.get('id') != tab_id]
         commands.append({'id': tab_id, 'token': token, 'priority': value})
         write_atomic(pending, commands[-MAX_TABS:])
+
+
+def candidates(base):
+    items = []
+    for profile in snapshots(base):
+        for tab in profile['tabs']:
+            if tab['priority'] > 0 and tab['supported'] and not any(tab[x] for x in ('active', 'pinned', 'audible', 'discarded')):
+                items.append({**tab, 'profile': profile['profile']})
+    return sorted(items, key=lambda t: (-t['priority'], t['profile'], t['id']))
+
+
+def request_discard(base, tab):
+    # Revalidate the current snapshot before queuing an action. Chrome rechecks again.
+    current = next((t for t in candidates(base) if t['profile'] == tab['profile']
+                    and t['id'] == tab['id'] and t['token'] == tab['token']), None)
+    if current is None:
+        raise ValueError('tab is no longer eligible')
+    path = folder(base)
+    pending = path / (tab['profile'] + '.queue')
+    with (path / (tab['profile'] + '.lock')).open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            commands = json.loads(pending.read_text())
+        except (OSError, ValueError):
+            commands = []
+        if commands:
+            raise ValueError('priority changes are pending')
+        write_atomic(pending, [{'id': tab['id'], 'token': tab['token'], 'action': 'discard', 'expires': time.time() + 12}])

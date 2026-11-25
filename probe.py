@@ -24,6 +24,7 @@ from model_pricing import rates_for
 from history import initialize, record
 from priorities import read_priorities
 from response_status import explain
+from tab_response import TabResponse
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -94,9 +95,9 @@ class Advisor:
         choices = [item['id'] for item in candidates]
         if not self.enabled or not choices:
             return None
-        instructions = ('Choose one listed low-priority application to close cleanly to recover memory, '
+        instructions = ('Choose one listed permitted memory-recovery action or low-priority application, '
                         'or choose none. Only the listed identifiers may be returned. '
-                        'Use observed memory pressure and estimated RSS to decide. '
+                        'Use observed pressure and provided resource data; tab RSS may be unavailable. '
                         'You cannot execute actions or provide commands.')
         payload = json.dumps({'memory': telemetry, 'eligible_apps': candidates}, ensure_ascii=False)
         schema = {'type': 'object', 'properties': {'app': {'type': 'string',
@@ -177,6 +178,7 @@ class Probe:
         self.advisor = Advisor(ai, self.budget)
         self.stop = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self.tab_response = TabResponse(self, RUNTIME)
 
     def event(self, kind, details):
         try:
@@ -253,7 +255,13 @@ class Probe:
                     notify(summary)
                 trial = None
 
-            if level == 'critical' and not trial and now >= next_action:
+            tab_busy = False
+            if not trial and advice is None and now >= next_action:
+                tab_busy = self.tab_response.tick(sample, level, now)
+                if tab_busy:
+                    summary = self.tab_response.summary
+                    ai_status = '탭 대응 · ' + summary
+            if level == 'critical' and not trial and not tab_busy and now >= next_action:
                 candidates = [app for app in ResponseAgent.candidates(apps, settings)
                               if app.key not in unsuccessful_apps]
                 if not candidates:

@@ -10,30 +10,16 @@ async function inspectTabs() {
   const [tabs, priorities] = await Promise.all([chrome.tabs.query({}), settings()]);
   return tabs.map(tab => ({tab, setting: priorities[tab.id]}));
 }
+function tabPriority(tab, setting) {
+  return setting && setting.url === tab.url && Number.isInteger(setting.priority) &&
+    setting.priority >= 0 && setting.priority <= 999 ? setting.priority : 500;
+}
 function eligible({tab, setting}) {
-  return !!setting && Number.isInteger(setting.priority) && setting.priority >= 1 && setting.priority <= 999 &&
-    setting.url === tab.url && typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) &&
+  return tabPriority(tab, setting) > 0 && typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) &&
     !tab.active && !tab.pinned && !tab.audible && !tab.discarded && !tab.incognito;
 }
-async function cycle() {
-  let entries = (await inspectTabs()).filter(eligible);
-  entries.sort((a, b) => b.setting.priority - a.setting.priority ||
-    (a.tab.lastAccessed || 0) - (b.tab.lastAccessed || 0));
-  if (!entries.length) return;
-  const grant = await chrome.runtime.sendNativeMessage(HOST, {type: 'claim'});
-  if (!grant.granted) return;
-  // Recheck after IPC: a user could have focused, protected, or navigated the tab.
-  entries = (await inspectTabs()).filter(eligible);
-  entries.sort((a, b) => b.setting.priority - a.setting.priority ||
-    (a.tab.lastAccessed || 0) - (b.tab.lastAccessed || 0));
-  if (!entries.length) return;
-  try {
-    await chrome.tabs.discard(entries[0].tab.id);
-    await chrome.runtime.sendNativeMessage(HOST, {type: 'report', result: 'discarded'});
-  } catch (_) {
-    await chrome.runtime.sendNativeMessage(HOST, {type: 'report', result: 'failed'});
-  }
-}
+// The agent now owns AI selection, verification and learning. No independent discards.
+async function cycle() { await syncWindow(); }
 async function schedule() {
   await chrome.alarms.create(ALARM, {periodInMinutes: 0.5});
 }
@@ -84,8 +70,7 @@ async function syncWindow() {
       const identity = previous && previous.url === tab.url ? previous : {url: tab.url || '', token: crypto.randomUUID()};
       identities[tab.id] = identity;
       const setting = priorities[tab.id];
-      const value = setting && setting.url === tab.url && Number.isInteger(setting.priority) &&
-        setting.priority >= 1 && setting.priority <= 999 ? setting.priority : 0;
+      const value = typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url) ? tabPriority(tab, setting) : 0;
       entries.push({id: tab.id, token: identity.token, title: (tab.title || '제목 없는 탭').slice(0, 160),
         priority: value, active: !!tab.active, pinned: !!tab.pinned, audible: !!tab.audible,
         discarded: !!tab.discarded, supported: typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url)});
@@ -97,7 +82,8 @@ async function syncWindow() {
 async function applyCommands(commands) {
   if (!Array.isArray(commands)) return;
   for (const cmd of commands) {
-    if (!Number.isInteger(cmd.id) || !Number.isInteger(cmd.priority) || cmd.priority < 0 || cmd.priority > 999) continue;
+    if (!Number.isInteger(cmd.id)) continue;
+    if (cmd.action !== 'discard' && (!Number.isInteger(cmd.priority) || cmd.priority < 0 || cmd.priority > 999)) continue;
     try {
       const tab = await chrome.tabs.get(cmd.id);
       const session = await chrome.storage.session.get(['tabPriorities', 'tabIdentities']);
@@ -105,9 +91,17 @@ async function applyCommands(commands) {
       if (!identity || identity.token !== cmd.token || identity.url !== tab.url || tab.incognito ||
           typeof tab.url !== 'string' || !/^https?:\/\//i.test(tab.url)) continue;
       const all = session.tabPriorities || {};
-      if (cmd.priority === 0) delete all[cmd.id];
-      else all[cmd.id] = {url: tab.url, priority: cmd.priority};
-      await chrome.storage.session.set({tabPriorities: all});
+      if (cmd.action === 'discard') {
+        if (Date.now() / 1000 > cmd.expires || !eligible({tab, setting: all[cmd.id]})) continue;
+        const state = await chrome.runtime.sendNativeMessage(HOST, {type: 'status'});
+        const freshTab = await chrome.tabs.get(cmd.id);
+        const freshSettings = await settings();
+        if (!state.critical || freshTab.url !== identity.url || !eligible({tab: freshTab, setting: freshSettings[cmd.id]})) continue;
+        await chrome.tabs.discard(cmd.id);
+      } else {
+        all[cmd.id] = {url: tab.url, priority: cmd.priority};
+        await chrome.storage.session.set({tabPriorities: all});
+      }
     } catch (_) { /* tab was closed or changed */ }
   }
   await syncWindow();
@@ -134,4 +128,4 @@ function connectBridge() {
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === ALARM && !bridge) connectBridge(); });
 if (typeof module === 'undefined') connectBridge();
 // Testable pure eligibility policy without browser access.
-if (typeof module !== 'undefined') module.exports = {eligible, cycle, applyCommands};
+if (typeof module !== 'undefined') module.exports = {eligible, cycle, applyCommands, tabPriority};

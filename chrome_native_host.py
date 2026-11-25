@@ -56,26 +56,8 @@ def handle(message):
         if result in ('discarded', 'failed'):
             event('tab_' + result)
         return {'ok': True}
-    if kind != 'claim':
-        return {'error': 'unknown_request'}
-    try:
-        BASE.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # One grant across all Chrome profiles; do not trust timestamps supplied by Chrome.
-        fd = os.open(BASE / 'tab-cooldown.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'r+') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            data = status()
-            now = time.time()
-            try:
-                last = float(lock.read())
-            except ValueError:
-                last = 0
-            if not data['critical'] or now - last < COOLDOWN:
-                return {'granted': False}
-            lock.seek(0); lock.truncate(); lock.write(str(now)); lock.flush()
-            return {'granted': True}
-    except (OSError, ValueError):
-        return {'granted': False}
+    # Old extension versions must not bypass AI/verification in the agent.
+    return {'granted': False, 'reason': 'agent_controls_tab_actions'}
 
 
 def main():

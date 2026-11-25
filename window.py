@@ -64,7 +64,7 @@ def update_priority(key, value):
         Path(tmp).unlink(missing_ok=True)
 
 
-APP_NAMES = {'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
+APP_NAMES = {'chrome_tab_highest_priority': 'Chrome 탭 메모리 회수', 'idea': 'IntelliJ IDEA', 'code': 'VS Code', 'datagrip': 'DataGrip',
              'chrome': 'Google Chrome', 'chromium': 'Chromium', 'firefox': 'Firefox',
              'slack': 'Slack', 'discord': 'Discord', 'edge': 'Microsoft Edge',
              'codium': 'VSCodium', 'pycharm': 'PyCharm', 'webstorm': 'WebStorm'}
@@ -76,7 +76,10 @@ def app_name(key):
 
 def scenario_text(value):
     try:
-        pressure, swap, candidates = json.loads(value)
+        parsed = json.loads(value)
+        if parsed[0] == 'chrome-tab-v1':
+            return f'Chrome 탭 회수 규칙 · 최우선 회수 숫자 {parsed[2]} · {parsed[1]}'
+        pressure, swap, candidates = parsed
         pressure_text = {'stall': '메모리 압박', 'low-available': '가용 메모리 부족',
                          'psi-unavailable': '압박 지표 확인 불가'}.get(pressure, pressure)
         return f"{pressure_text} · 스왑 I/O {'있음' if swap else '없음'} · 후보 {', '.join(app_name(x) for x in candidates)}"
@@ -174,7 +177,7 @@ class HistoryWindow(Gtk.Window):
             if not skills:
                 self.card('저장된 스킬 없음', '대응 후 메모리 회복이 확인되면 저장됩니다.')
             for scenario, app in skills:
-                self.card(app_name(app) + ' 종료 요청', scenario_text(scenario))
+                self.card(app_name(app) + (' 규칙' if app == 'chrome_tab_highest_priority' else ' 종료 요청'), scenario_text(scenario))
             self.content.pack_start(label('최근 활동', 'eyebrow'), False, False, 0)
             if not events:
                 self.card('아직 기록이 없습니다', '이 업데이트 이후 발생하는 AI 제안과 대응부터 기록됩니다.')

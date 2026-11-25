@@ -44,7 +44,7 @@ class NativeHostTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)), \
              patch.object(host, 'status', return_value={'running': True, 'critical': True}), \
              patch('chrome_native_host.time.time', return_value=1000):
-            self.assertTrue(host.handle({'type': 'claim'})['granted'])
+            self.assertFalse(host.handle({'type': 'claim'})['granted'])
             self.assertFalse(host.handle({'type': 'claim'})['granted'])
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)), \
              patch.object(host, 'status', return_value={'running': True, 'critical': False}):
