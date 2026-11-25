@@ -179,19 +179,19 @@ class AnalysisAgent:
 
 
 def priority(key, overrides):
-    return overrides.get(key, 0 if key in IDE_DEFAULTS else 4)
+    return overrides.get(key, 0)
 
 
 class ResponseAgent:
     @staticmethod
     def candidates(apps, overrides):
-        eligible = [app for app in apps if 1 <= priority(app.key, overrides) <= 3
+        eligible = [app for app in apps if 1 <= priority(app.key, overrides) <= 999
                     and len(app.leaders) == 1 and app.rss >= 128 * MIB]
-        return sorted(eligible, key=lambda app: (priority(app.key, overrides), -app.rss, app.key))
+        return sorted(eligible, key=lambda app: (-priority(app.key, overrides), -app.rss, app.key))
 
     @staticmethod
     def close(app, current_priorities):
-        if len(app.leaders) != 1 or priority(app.key, current_priorities) not in (1, 2, 3):
+        if len(app.leaders) != 1 or not 1 <= priority(app.key, current_priorities) <= 999:
             raise ValueError('현재 설정에서 종료할 수 없는 앱입니다')
         original = app.leaders[0]
         # Sending through pidfd cannot signal a process that recycled this PID.

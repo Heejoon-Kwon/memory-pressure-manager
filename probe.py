@@ -22,6 +22,7 @@ from agents import (APP_NAMES, MIB, AnalysisAgent, OOMPreference, ResponseAgent,
 from budget import Budget, BudgetExceeded
 from model_pricing import rates_for
 from history import initialize, record
+from priorities import read_priorities
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -47,13 +48,7 @@ def atomic_json(path, value):
 
 
 def overrides():
-    try:
-        data = json.loads((STATE / 'priorities.json').read_text())
-    except (ValueError, OSError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {k: v for k, v in data.items() if k in APP_NAMES and type(v) is int and 0 <= v <= 4}
+    return {k: v for k, v in read_priorities(STATE / 'priorities.json').items() if k in APP_NAMES}
 
 
 class Skills:

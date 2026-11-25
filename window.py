@@ -13,11 +13,11 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 from history import read_history
+from priorities import read_priorities
 
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
 RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME')
                or Path.home() / '.cache') / 'probe'
-OPTIONS = ('보호', '먼저 닫기', '다음에 닫기', '마지막에 닫기', '유지')
 CSS = b'''
 window { background: #000; color: #fff; }
 .title { font-size: 22px; font-weight: 700; }
@@ -51,12 +51,12 @@ def read(path):
 
 def update_priority(key, value):
     path = STATE / 'priorities.json'
-    values = read(path)
+    values = read_priorities(path)
     values[key] = value
     fd, tmp = tempfile.mkstemp(dir=STATE)
     try:
         with os.fdopen(fd, 'w') as f:
-            json.dump(values, f)
+            json.dump({'version': 2, 'apps': values}, f)
         os.replace(tmp, path)
     finally:
         Path(tmp).unlink(missing_ok=True)
@@ -190,9 +190,9 @@ class Window(Gtk.Window):
         root.pack_start(summary, False, False, 0)
         guide = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         guide.get_style_context().add_class('frame')
-        for text in ('보호  ·  자동 종료 대상에서 제외하고 시스템 보호를 시도합니다.',
-                     '유지  ·  Probe가 자동으로 종료하지 않습니다.',
-                     '먼저 / 다음 / 마지막에 닫기  ·  메모리가 위험할 때 이 순서대로 종료를 요청합니다.'):
+        for text in ('보호 · Probe가 종료하지 않으며 시스템 보호를 시도합니다.',
+                     '우선순위 1~999 · 숫자가 낮을수록 중요합니다. 숫자가 큰 앱부터 종료를 요청합니다.',
+                     '같은 숫자는 허용됩니다. 운영체제의 강제 종료까지 막을 수는 없습니다.'):
             item = label(text, 'muted');item.set_line_wrap(True);guide.pack_start(item, False, False, 0)
         root.pack_start(guide, False, False, 0)
         root.pack_start(label('메모리를 사용하는 앱', 'eyebrow'), False, False, 0)
@@ -224,9 +224,11 @@ class Window(Gtk.Window):
     def history_closed(self, *_):
         self.history_window = None
 
-    def changed(self, combo, key):
+    def changed(self, widget, key):
+        row, memory, protect, number = self.entries[key]
+        number.set_sensitive(not protect.get_active())
         try:
-            update_priority(key, combo.get_active())
+            update_priority(key, 0 if protect.get_active() else number.get_value_as_int())
         except OSError:
             self.note.set_text('우선순위를 저장할 수 없습니다. Probe가 실행 중인지 확인하세요.')
 
@@ -235,19 +237,24 @@ class Window(Gtk.Window):
         row = Gtk.ListBoxRow()
         line = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8)
         row.add(line)
-        name = label(item['name'])
-        line.pack_start(name, True, True, 0)
+        line.pack_start(label(item['name']), True, True, 0)
         memory = label(style='muted')
         line.pack_start(memory, False, False, 0)
-        combo = Gtk.ComboBoxText()
-        for option in OPTIONS:
-            combo.append_text(option)
-        combo.set_active(item['priority'])
-        handler = combo.connect('changed', self.changed, key)
-        line.pack_end(combo, False, False, 0)
+        protect = Gtk.CheckButton(label='보호')
+        number = Gtk.SpinButton.new_with_range(1, 999, 1)
+        number.set_numeric(True)
+        number.set_width_chars(4)
+        value = item['priority']
+        protect.set_active(value == 0)
+        number.set_value(value if value else 500)
+        number.set_sensitive(value != 0)
+        line.pack_end(number, False, False, 0)
+        line.pack_end(protect, False, False, 0)
         self.rows.add(row)
+        self.entries[key] = (row, memory, protect, number)
+        protect.connect('toggled', self.changed, key)
+        number.connect('value-changed', self.changed, key)
         row.show_all()
-        self.entries[key] = (row, memory, combo, handler)
 
     def render(self):
         data = read(RUNTIME / 'status.json')
@@ -260,7 +267,7 @@ class Window(Gtk.Window):
                                   f"  ·  이번 달 ${data['cost_micro'] / 1e6:.4f}")
             self.note.set_text(f"{data['status']}  ·  저장된 대응 {data['learned_skills']}개"
                                f"  ·  systemd 보호 적용 {data['protected_scopes']}개")
-        saved = read(STATE / 'priorities.json')
+        saved = read_priorities(STATE / 'priorities.json')
         items = sorted(data.get('apps', []), key=lambda item: (-item['rss_mib'], item['name']))[:12]
         current = {item['id'] for item in items}
         for key in self.entries.keys() - current:
@@ -269,15 +276,21 @@ class Window(Gtk.Window):
             key = item['id']
             if key not in self.entries:
                 self.add_app(item)
-            row, memory, combo, handler = self.entries[key]
+            row, memory, protect, number = self.entries[key]
             memory.set_text(f"약 {item['rss_mib']:,} MiB")
-            if not combo.has_focus():
-                # Programmatic updates must not save defaults or overwrite a user change.
-                combo.handler_block(handler)
-                combo.set_active(saved.get(key, item['priority']))
-                combo.handler_unblock(handler)
-            combo.set_tooltip_text('RSS 합계. 공유 메모리가 겹칠 수 있습니다.'
-                                   if item['eligible'] else '단일 앱 프로세스를 확인할 수 없어 자동 종료 대상에서 제외됩니다.')
+            # Do not overwrite edits or emit writes while refreshing.
+            if not number.has_focus() and not protect.has_focus():
+                value = saved.get(key, item['priority'])
+                protect.handler_block_by_func(self.changed)
+                number.handler_block_by_func(self.changed)
+                protect.set_active(value == 0)
+                if value:
+                    number.set_value(value)
+                number.set_sensitive(value != 0)
+                protect.handler_unblock_by_func(self.changed)
+                number.handler_unblock_by_func(self.changed)
+            number.set_tooltip_text('숫자가 클수록 먼저 종료를 요청합니다.'
+                                    if item['eligible'] else '단일 앱 프로세스를 확인할 수 없어 자동 종료 대상에서 제외됩니다.')
         return True
 
 

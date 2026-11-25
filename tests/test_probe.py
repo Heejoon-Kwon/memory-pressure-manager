@@ -18,6 +18,20 @@ def process(pid, executable, rss=200, *, parent=1, args=()):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_priority_migration_and_new_order(self):
+        import json
+        from priorities import read_priorities
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'priorities.json'
+            path.write_text(json.dumps({'chrome': 1, 'slack': 2, 'firefox': 3, 'code': 4, 'idea': 0}))
+            old = read_priorities(path)
+            self.assertEqual(old, {'chrome': 999, 'slack': 500, 'firefox': 1, 'code': 0, 'idea': 0})
+            path.write_text(json.dumps({'version': 2, 'apps': {'chrome': 123, 'slack': 123, 'code': 0, 'idea': 1000}}))
+            self.assertEqual(read_priorities(path), {'chrome': 123, 'slack': 123, 'code': 0})
+            apps = group_apps([process(10, 'chrome'), process(20, 'firefox'), process(30, 'slack')])
+            selected = ResponseAgent.candidates(apps, {'chrome': 1, 'firefox': 999, 'slack': 999})
+            self.assertEqual([a.key for a in selected], ['firefox', 'slack', 'chrome'])
+
     def test_diagnostics_redacts_key_and_reports_eligible_apps(self):
         from diagnostics import inspect
         apps = group_apps([process(10, 'chrome'), process(20, 'code')])
@@ -93,7 +107,7 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(apps[0].leaders, [chrome])
         self.assertEqual(ResponseAgent.candidates(apps, {}), [])
         self.assertEqual([a.key for a in ResponseAgent.candidates(apps, {'chrome': 2, 'idea': 1})],
-                         ['idea', 'chrome'])
+                         ['chrome', 'idea'])
 
     def test_multiple_instances_and_opt_out_are_ineligible(self):
         apps = group_apps([process(10, 'chrome'), process(11, 'chrome')])
