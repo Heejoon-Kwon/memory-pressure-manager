@@ -207,6 +207,7 @@ class Probe:
         declined_scenarios = set()
         unsuccessful_apps = set()
         summary = '메모리 감시 중'
+        ai_disabled_reported = False
         while not self.stop.is_set():
             now = time.monotonic()
             sample = self.watch.sample()
@@ -251,6 +252,7 @@ class Probe:
                 if not candidates:
                     if now >= next_notice:
                         summary = '메모리 압박 · 종료를 허용한 앱 없음'
+                        self.event('no_candidates', {'memory': snapshot(sample)})
                         notify(summary)
                         next_notice = now + self.cooldown
                 else:
@@ -259,6 +261,10 @@ class Probe:
                     scenario = scenario_for(sample, previous, candidates)
                     app = self.skills.get(scenario, candidates)
                     source = 'skill' if app else None
+                    if not self.advisor.enabled and not ai_disabled_reported:
+                        reason = 'no_api_key' if not self.advisor.key else 'zero_budget'
+                        self.event('ai_disabled', {'reason': reason})
+                        ai_disabled_reported = True
                     declined = scenario in declined_scenarios
                     if not app and advice and advice[1].done():
                         asked_scenario, future = advice
@@ -332,6 +338,7 @@ class Probe:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='config.yml')
+    parser.add_argument('--diagnose', action='store_true', help='민감정보 없이 설정 및 대응 조건 확인 (API 호출 없음)')
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(message)s')
     os.umask(0o077)
@@ -345,6 +352,11 @@ def main():
             if st.st_uid != os.getuid() or st.st_mode & 0o077:
                 parser.error('설정 파일 권한을 chmod 600으로 바꾸세요')
             config = yaml.safe_load(file) or {}
+    if args.diagnose:
+        from diagnostics import inspect
+        result = inspect(config, overrides(), STATE / 'probe.sqlite3')
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     with (RUNTIME / 'guard.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

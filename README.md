@@ -37,3 +37,7 @@ Probe는 `MemAvailable`, PSI와 스왑 I/O로 압박을 평가합니다. 높은 
 서비스 확인은 `systemctl --user status probe.service`, 실행 로그는 `journalctl --user -u probe.service -n 30`, 중지는 `systemctl --user stop probe.service`입니다. 이후 로그인에서도 시작하지 않으려면 `systemctl --user disable --now probe.service`를 실행하세요.
 
 근거 문서 [Linux 메모리 PSI](https://docs.kernel.org/accounting/psi.html), [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html), [systemd 자원 제어](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html), [systemd-oomd](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.service.html).
+
+### AI 대응 진단
+
+서비스의 ExecStart에 지정된 폴더로 이동해서 `.venv/bin/python probe.py --config config.yml --diagnose`를 실행하면 API 키 값 없이 키 입력 여부, 월 예산, 모델 가격 조회 가능 여부, 감지한 앱과 종료 후보, 최근 이력의 종류를 확인할 수 있습니다. 이 명령은 OpenAI API를 호출하거나 앱을 종료하지 않습니다. `priority` 0은 보호, 4는 유지, 1~3은 종료 허용입니다. 해당 앱이 128 MiB 미만이거나 대표 프로세스가 하나가 아니면 후보에 포함되지 않습니다. 실제 서비스가 참조하는 경로는 `systemctl --user show probe.service -p ExecStart`에서 확인하세요.

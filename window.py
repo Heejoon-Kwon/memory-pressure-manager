@@ -87,7 +87,8 @@ def event_text(kind, details):
     source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단'}.get(details.get('source'), '')
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
-              'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패'}
+              'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
+              'no_candidates': '자동 종료 가능한 앱 없음', 'ai_disabled': 'AI 분석 사용 불가'}
     lines = []
     if kind == 'ai_request':
         memory = details.get('memory', {})
@@ -95,6 +96,10 @@ def event_text(kind, details):
         lines.append('후보: ' + ', '.join(f"{app_name(x.get('id'))} ({x.get('rss_mib', '?')} MiB)" for x in details.get('candidates', [])))
     elif kind == 'ai_proposal':
         lines.append('제안: ' + ('종료 보류' if details.get('app') == 'none' else app))
+    elif kind == 'no_candidates':
+        lines.append('종료 허용 우선순위, 앱 인식 여부와 단일 실행 여부를 확인하세요.')
+    elif kind == 'ai_disabled':
+        lines.append({'no_api_key': 'API 키가 설정되지 않았습니다.', 'zero_budget': '월 예산이 0입니다.'}.get(details.get('reason'), '설정을 확인하세요.'))
     elif kind == 'ai_error':
         lines.append('오류 유형: ' + details.get('error', '알 수 없음'))
     else:

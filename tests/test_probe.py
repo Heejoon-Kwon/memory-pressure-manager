@@ -18,6 +18,20 @@ def process(pid, executable, rss=200, *, parent=1, args=()):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_diagnostics_redacts_key_and_reports_eligible_apps(self):
+        from diagnostics import inspect
+        apps = group_apps([process(10, 'chrome'), process(20, 'code')])
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch('diagnostics.AnalysisAgent.applications', return_value=apps), \
+                patch('diagnostics.rates_for', return_value=(0.1, 0.5)):
+            report = inspect({'openai': {'api_key': 'super-secret', 'monthly_budget_usd': 1}},
+                             {'chrome': 1}, Path(tmp) / 'absent.db')
+            self.assertTrue(report['api_key_configured'])
+            self.assertNotIn('super-secret', str(report))
+            chrome = next(app for app in report['detected_apps'] if app['name'] == 'Google Chrome')
+            self.assertTrue(chrome['eligible'])
+            self.assertFalse((Path(tmp) / 'absent.db').exists())
+
     def test_history_preserves_existing_skills_and_records_advice(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'probe.db'
