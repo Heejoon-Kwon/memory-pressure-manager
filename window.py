@@ -248,19 +248,25 @@ def app_icon(key):
     if key in _desktop_icons:
         image = Gtk.Image.new_from_gicon(_desktop_icons[key], Gtk.IconSize.DIALOG)
         image.set_pixel_size(30)
+        image.specific_icon = True
         return image
     bundled = {'idea': 'intellij-idea.svg', 'datagrip': 'datagrip.svg', 'code': 'code.svg', 'slack': 'slack.svg'}.get(key)
     if bundled:
         path = Path(__file__).parent / 'assets' / bundled
         if path.is_file():
-            return Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 30, 30, True))
+            image = Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 30, 30, True))
+            image.specific_icon = True
+            return image
     theme = Gtk.IconTheme.get_default()
     for name in APP_ICONS.get(key, (key, 'application-x-executable')):
         if theme.has_icon(name):
             image = Gtk.Image.new_from_icon_name(name, Gtk.IconSize.DIALOG)
             image.set_pixel_size(30)
+            image.specific_icon = name not in ('application-x-executable', 'applications-development', 'web-browser')
             return image
-    return Gtk.Image.new_from_icon_name('application-x-executable', Gtk.IconSize.LARGE_TOOLBAR)
+    image = Gtk.Image.new_from_icon_name('application-x-executable', Gtk.IconSize.LARGE_TOOLBAR)
+    image.specific_icon = False
+    return image
 
 
 def set_favicon(image, data):
@@ -275,6 +281,7 @@ def set_favicon(image, data):
         loader.write(raw)
         loader.close()
         image.set_from_pixbuf(loader.get_pixbuf())
+        return True
     except (ValueError, GLib.Error):
         pass
 
@@ -336,7 +343,9 @@ class Window(Gtk.Window):
         root.pack_start(self.search, False, False, 0)
         self.rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.tab_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.rows.set_sort_func(lambda a, b: (a.sort_key > b.sort_key) - (a.sort_key < b.sort_key))
+        compare = lambda a, b: (a.sort_key > b.sort_key) - (a.sort_key < b.sort_key)
+        self.rows.set_sort_func(compare)
+        self.tab_rows.set_sort_func(compare)
         self.apps_heading = label('앱 · 프로세스', 'eyebrow')
         self.tabs_heading = label('CHROME 탭', 'eyebrow')
         self.tab_status = label('Chrome 연결 확인 중', 'muted')
@@ -400,7 +409,7 @@ class Window(Gtk.Window):
 
     def create_row(self, name, icon, value, callback, key):
         row = Gtk.ListBoxRow()
-        row.sort_key = (0, name)
+        row.sort_key = (True, 0, '')
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         row.add(box)
         top = Gtk.Box(spacing=10)
@@ -484,7 +493,7 @@ class Window(Gtk.Window):
         for key in self.tabs.keys() - keys:
             self.tab_rows.remove(self.tabs.pop(key)['row'])
             self.tab_pending.pop(key, None)
-        for profile, item in items:
+        for position, (profile, item) in enumerate(items):
             key = (profile, item['id'], item['token'])
             if key not in self.tabs:
                 self.tabs[key] = self.create_row(item['title'], app_icon('chrome'), item['priority'], self.tab_changed, key)
@@ -496,8 +505,9 @@ class Window(Gtk.Window):
             entry['title'].set_text(item['title'])
             entry['title'].set_tooltip_text(item['title'])
             if item.get('favicon') and item['favicon'] != entry['favicon']:
-                set_favicon(entry['icon'], item['favicon'])
-                entry['favicon'] = item['favicon']
+                if set_favicon(entry['icon'], item['favicon']):
+                    entry['favicon'] = item['favicon']
+            entry['row'].sort_key = (not bool(entry['favicon']), position)
             pending = self.tab_pending.get(key)
             if pending and (pending[0] == item['priority'] or pending[1] < time.monotonic()):
                 self.tab_pending.pop(key, None)
@@ -511,6 +521,8 @@ class Window(Gtk.Window):
             entry['detail'].set_text('저장 중…' if pending else ' · '.join(flags or [('Chrome 앱 · 창 종료' if item.get('standalone') else '프로필 ' + profile[:4])]))
             if not pending:
                 self.update_controls(entry, item['priority'], item['supported'])
+
+        self.tab_rows.invalidate_sort()
 
     def render(self):
         data = read(RUNTIME / 'status.json')
@@ -548,7 +560,7 @@ class Window(Gtk.Window):
                 self.rows.add(self.entries[key]['row'])
                 self.entries[key]['row'].show_all()
             entry = self.entries[key]
-            entry['row'].sort_key = (-item['rss_mib'], item['name'])
+            entry['row'].sort_key = (not getattr(entry['icon'], 'specific_icon', False), -item['rss_mib'], item['name'])
             size = item['rss_mib']
             entry['memory'].set_text(f'{size / 1024:.1f} GiB' if size >= 1024 else f'{size:,} MiB')
             reason = REASONS.get(item.get('blocked_reason'), '자동 대응 가능')
