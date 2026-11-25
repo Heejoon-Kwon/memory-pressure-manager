@@ -14,6 +14,7 @@ gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 from history import read_history
 from priorities import read_priorities
+from chrome_tabs import snapshots, enqueue
 
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
 RUNTIME = Path(os.environ.get('XDG_RUNTIME_DIR') or os.environ.get('XDG_CACHE_HOME')
@@ -90,7 +91,8 @@ def event_text(kind, details):
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
               'no_candidates': '자동 종료 가능한 앱 없음', 'ai_disabled': 'AI 분석 사용 불가',
               'tab_discarded': 'Chrome 탭 메모리 회수', 'tab_failed': 'Chrome 탭 메모리 회수 실패',
-              'ai_test_success': 'AI 연결 테스트 성공', 'ai_test_failed': 'AI 연결 테스트 실패'}
+              'ai_test_success': 'AI 연결 테스트 성공', 'ai_test_failed': 'AI 연결 테스트 실패',
+              'pressure_warning': '메모리 주의', 'pressure_critical': '메모리 위험'}
     lines = []
     if kind == 'ai_request':
         memory = details.get('memory', {})
@@ -98,6 +100,9 @@ def event_text(kind, details):
         lines.append('후보: ' + ', '.join(f"{app_name(x.get('id'))} ({x.get('rss_mib', '?')} MiB)" for x in details.get('candidates', [])))
     elif kind == 'ai_proposal':
         lines.append('제안: ' + ('종료 보류' if details.get('app') == 'none' else app))
+    elif kind in ('pressure_warning', 'pressure_critical'):
+        memory = details.get('memory', {})
+        lines.append(f"가용 {memory.get('available_mib', '?')} MiB · 스왑 {memory.get('swap_used_mib', '?')} MiB")
     elif kind in ('ai_test_success', 'ai_test_failed'):
         lines.append('모델: ' + details.get('model', '알 수 없음'))
         if 'error' in details:
@@ -205,8 +210,15 @@ class Window(Gtk.Window):
         root.pack_start(guide, False, False, 0)
         root.pack_start(label('메모리를 사용하는 앱', 'eyebrow'), False, False, 0)
         self.rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.tab_rows = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.tab_status = label('Chrome 탭 연결 확인 중', 'muted')
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        content.pack_start(self.rows, False, False, 0)
+        content.pack_start(label('CHROME 탭', 'eyebrow'), False, False, 8)
+        content.pack_start(self.tab_status, False, False, 0)
+        content.pack_start(self.tab_rows, False, False, 0)
         scroll = Gtk.ScrolledWindow()
-        scroll.add(self.rows)
+        scroll.add(content)
         root.pack_start(scroll, True, True, 0)
         caption = label('자동 종료 요청은 저장하지 않은 작업을 잃게 할 수 있습니다.', 'muted')
         caption.set_line_wrap(True)
@@ -217,6 +229,8 @@ class Window(Gtk.Window):
         root.pack_start(history_button, False, False, 0)
         self.history_window = None
         self.entries = {}
+        self.tabs = {}
+        self.tab_pending = {}
         self.render()
         GLib.timeout_add_seconds(3, self.render)
 
@@ -264,6 +278,88 @@ class Window(Gtk.Window):
         number.connect('value-changed', self.changed, key)
         row.show_all()
 
+    def tab_changed(self, widget, key):
+        row, title, flags, protect, number, profile, token, tab_id = self.tabs[key]
+        number.set_sensitive(not protect.get_active())
+        value = 0 if protect.get_active() else number.get_value_as_int()
+        try:
+            enqueue(RUNTIME, profile, tab_id, token, value)
+            self.tab_pending[key] = (value, time.monotonic() + 12)
+            flags.set_text('설정 전달 중…')
+        except (OSError, ValueError):
+            flags.set_text('설정 실패 · Chrome 연결을 확인하세요')
+
+    def add_tab(self, profile, item):
+        tab_id = item['id']
+        key = (profile, tab_id, item['token'])
+        row = Gtk.ListBoxRow()
+        line = Gtk.Box(spacing=12, margin_top=8, margin_bottom=8)
+        row.add(line)
+        details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        title = label(item['title'])
+        title.set_ellipsize(3)
+        title.set_max_width_chars(42)
+        flags = label(style='muted')
+        details.pack_start(title, False, False, 0)
+        details.pack_start(flags, False, False, 0)
+        line.pack_start(details, True, True, 0)
+        protect = Gtk.CheckButton(label='보호')
+        number = Gtk.SpinButton.new_with_range(1, 999, 1)
+        number.set_numeric(True)
+        number.set_width_chars(4)
+        value = item['priority']
+        protect.set_active(value == 0)
+        number.set_value(value or 500)
+        protect.set_sensitive(item['supported'])
+        number.set_sensitive(item['supported'] and value != 0)
+        line.pack_end(number, False, False, 0)
+        line.pack_end(protect, False, False, 0)
+        self.tab_rows.add(row)
+        self.tabs[key] = (row, title, flags, protect, number, profile, item['token'], tab_id)
+        protect.connect('toggled', self.tab_changed, key)
+        number.connect('value-changed', self.tab_changed, key)
+        row.show_all()
+
+    def render_tabs(self):
+        try:
+            profiles = snapshots(RUNTIME)
+        except (OSError, ValueError):
+            profiles = []
+        self.tab_status.set_text(f'연결된 Chrome 프로필 {len(profiles)}개 · 탭은 메모리에서만 내립니다'
+                                 if profiles else 'Chrome 확장 연결 대기 중 · 확장을 다시 로드하세요')
+        items = [(p['profile'], item) for p in profiles for item in p['tabs']]
+        keys = {(profile, item['id'], item['token']) for profile, item in items}
+        for key in self.tabs.keys() - keys:
+            self.tab_rows.remove(self.tabs.pop(key)[0])
+            self.tab_pending.pop(key, None)
+        for profile, item in items:
+            key = (profile, item['id'], item['token'])
+            if key not in self.tabs:
+                self.add_tab(profile, item)
+            row, title, flags, protect, number, _, _, _ = self.tabs[key]
+            title.set_text(item['title'])
+            pending = self.tab_pending.get(key)
+            if pending and (pending[0] == item['priority'] or pending[1] < time.monotonic()):
+                self.tab_pending.pop(key, None)
+                pending = None
+            notes = [name for flag, name in (('active', '사용 중'), ('pinned', '고정'),
+                      ('audible', '소리 재생'), ('discarded', '메모리에서 내려짐')) if item[flag]]
+            if not item['supported']:
+                notes.append('설정 불가')
+            flags.set_text('설정 전달 중…' if pending else
+                           ' · '.join(['프로필 ' + profile[:6], *notes]))
+            if not pending and not number.has_focus() and not protect.has_focus():
+                value = item['priority']
+                protect.handler_block_by_func(self.tab_changed)
+                number.handler_block_by_func(self.tab_changed)
+                protect.set_active(value == 0)
+                if value:
+                    number.set_value(value)
+                protect.set_sensitive(item['supported'])
+                number.set_sensitive(item['supported'] and value != 0)
+                protect.handler_unblock_by_func(self.tab_changed)
+                number.handler_unblock_by_func(self.tab_changed)
+
     def render(self):
         data = read(RUNTIME / 'status.json')
         if time.time() - data.get('timestamp', 0) > 75:
@@ -274,7 +370,8 @@ class Window(Gtk.Window):
             self.metrics.set_text(f"RAM {data['usage']}%  ·  가용 {data['available_mib'] / 1024:.1f} GiB"
                                   f"  ·  이번 달 ${data['cost_micro'] / 1e6:.4f}")
             self.note.set_text(f"{data['status']}  ·  저장된 대응 {data['learned_skills']}개"
-                               f"  ·  systemd 보호 적용 {data['protected_scopes']}개")
+                               f"  ·  systemd 보호 적용 {data['protected_scopes']}개\n"
+                               f"AI: {data.get('ai_status', '서비스 업데이트 필요')}")
         saved = read_priorities(STATE / 'priorities.json')
         items = sorted(data.get('apps', []), key=lambda item: (-item['rss_mib'], item['name']))[:12]
         current = {item['id'] for item in items}
@@ -299,6 +396,7 @@ class Window(Gtk.Window):
                 number.handler_unblock_by_func(self.changed)
             number.set_tooltip_text('숫자가 클수록 먼저 종료를 요청합니다.'
                                     if item['eligible'] else '단일 앱 프로세스를 확인할 수 없어 자동 종료 대상에서 제외됩니다.')
+        self.render_tabs()
         return True
 
 

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 global.chrome = {runtime:{onInstalled:{addListener(){}},onStartup:{addListener(){}},onMessage:{addListener(){}}},alarms:{onAlarm:{addListener(){}}},tabs:{onRemoved:{addListener(){}}}};
-const {eligible, cycle} = require('../chrome-extension/background.js');
+const {eligible, cycle, applyCommands} = require('../chrome-extension/background.js');
 const tab = {id:1,url:'https://example.com/',active:false,pinned:false,audible:false,discarded:false,incognito:false};
 const setting = {url:tab.url,priority:999};
 assert.equal(eligible({tab,setting}),true);
@@ -33,4 +33,15 @@ assert.equal(eligible({tab:{...tab,url:'chrome://settings/'},setting:{url:'chrom
   afterClaim = () => { tab2.active = true; };
   await cycle();
   assert.deepEqual(discarded, [1]);
+  const identities = {1: {url: tab.url, token: 'session-a'}};
+  let state = {tabIdentities: identities, tabPriorities: {}};
+  chrome.tabs.get = async () => tab;
+  chrome.storage.session.get = async () => state;
+  chrome.storage.session.set = async obj => { state = {...state, ...obj}; };
+  await applyCommands([{id: 1, token: 'stale-session', priority: 900}]);
+  assert.equal(state.tabPriorities[1], undefined);
+  await applyCommands([{id: 1, token: 'session-a', priority: 900}]);
+  assert.equal(state.tabPriorities[1].priority, 900);
+  await applyCommands([{id: 1, token: 'session-a', priority: 0}]);
+  assert.equal(state.tabPriorities[1], undefined);
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from agents import GIB, MIB, AnalysisAgent, Process, ResponseAgent, Sample, group_apps
 from budget import Budget, BudgetExceeded
 from history import initialize, record, read_history
-from probe import Advisor, Skills, recovery_verified, scenario_for
+from probe import Advisor, Skills, recovery_verified, scenario_for, same_candidates
 
 
 def process(pid, executable, rss=200, *, parent=1, args=()):
@@ -31,6 +31,12 @@ class ProbeTests(unittest.TestCase):
             apps = group_apps([process(10, 'chrome'), process(20, 'firefox'), process(30, 'slack')])
             selected = ResponseAgent.candidates(apps, {'chrome': 1, 'firefox': 999, 'slack': 999})
             self.assertEqual([a.key for a in selected], ['firefox', 'slack', 'chrome'])
+
+    def test_ai_result_survives_pressure_change_but_not_candidate_change(self):
+        self.assertTrue(same_candidates('["stall", true, ["chrome"]]',
+                                        '["low-available", false, ["chrome"]]'))
+        self.assertFalse(same_candidates('["stall", true, ["chrome"]]',
+                                         '["stall", true, ["slack"]]'))
 
     def test_diagnostics_redacts_key_and_reports_eligible_apps(self):
         from diagnostics import inspect

@@ -13,6 +13,23 @@ from test_probe import process
 
 
 class NativeHostTests(unittest.TestCase):
+    def test_tab_snapshot_and_command_are_local_and_guarded_by_session_token(self):
+        import chrome_tabs
+        profile = '11111111-1111-4111-8111-111111111111'
+        token = '22222222-2222-4222-8222-222222222222'
+        other = '33333333-3333-4333-8333-333333333333'
+        tabs = [{'id': 7, 'token': token, 'title': 'Example', 'priority': 0, 'supported': True}]
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(chrome_tabs.sync(tmp, profile, tabs), [])
+            self.assertEqual(chrome_tabs.snapshots(tmp)[0]['tabs'][0]['title'], 'Example')
+            with self.assertRaises(ValueError):
+                chrome_tabs.enqueue(tmp, profile, 7, other, 999)
+            chrome_tabs.enqueue(tmp, profile, 7, token, 999)
+            changes = chrome_tabs.sync(tmp, profile, tabs)
+            self.assertEqual(changes, [{'id': 7, 'token': token, 'priority': 999}])
+            self.assertEqual(chrome_tabs.sync(tmp, profile, tabs), [])
+            self.assertNotIn('url', str(chrome_tabs.snapshots(tmp)))
+
     def test_status_rejects_stale_and_stopped_service(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)):
             (Path(tmp) / 'status.json').write_text(json.dumps({'timestamp': 100, 'level': 'critical'}))

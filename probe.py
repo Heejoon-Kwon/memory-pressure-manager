@@ -137,6 +137,10 @@ def scenario_for(sample, previous, candidates):
     return json.dumps([pressure, swap_io, sorted(app.key for app in candidates)])
 
 
+def same_candidates(first, second):
+    return json.loads(first)[2] == json.loads(second)[2]
+
+
 def snapshot(sample):
     return {'available_mib': round(sample.available / MIB), 'total_mib': round(sample.total / MIB),
             'swap_used_mib': round(sample.swap_used / MIB), 'psi_some_avg10': sample.some,
@@ -203,10 +207,15 @@ class Probe:
         unsuccessful_apps = set()
         summary = '메모리 감시 중'
         ai_disabled_reported = False
+        ai_status = '설정됨 · 위기 대응 시 호출' if self.advisor.enabled else 'API 키 또는 월 예산 확인'
+        last_level = None
         while not self.stop.is_set():
             now = time.monotonic()
             sample = self.watch.sample()
             level = self.analysis.pressure(sample)
+            if level != last_level and level != 'normal':
+                self.event('pressure_' + level, {'memory': snapshot(sample)})
+            last_level = level
             current_settings = overrides()
             if now >= next_inventory or current_settings != settings:
                 apps = self.analysis.applications()
@@ -266,22 +275,31 @@ class Probe:
                         advice = None
                         try:
                             choice = future.result()
-                            if asked_scenario == scenario:
+                            # Pressure/swap readings can change while the API is in flight;
+                            # only reuse a response if the permitted candidates still match.
+                            if same_candidates(asked_scenario, scenario):
+                                ai_status = 'AI 응답 수신'
                                 declined = choice == 'none'
                                 if declined:
                                     declined_scenarios.add(scenario)
                                 app = next((a for a in candidates if a.key == choice), None)
                                 if app:
                                     source = 'ai'
+                            else:
+                                used_advice = False
+                                ai_status = '후보 변경 · AI 재분석 대기'
                         except BudgetExceeded:
+                            ai_status = '월 예산으로 AI 호출 차단'
                             LOG.info('월 예산으로 API 분석 차단')
                         except Exception as exc:
+                            ai_status = 'AI 오류: ' + type(exc).__name__
                             LOG.warning('API 분석을 완료하지 못함 (%s)', type(exc).__name__)
                     if not app and not declined and not advice and not used_advice and self.advisor.enabled:
                         used_advice = True
                         payload = [{'id': a.key, 'rss_mib': round(a.rss / MIB)} for a in candidates]
                         advice = (scenario, self.executor.submit(self.ask_advisor, scenario, snapshot(sample), payload))
                         summary = '메모리 압박 분석 중'
+                        ai_status = 'AI 분석 요청 중'
                     elif app or (not advice and not declined):
                         app = app or candidates[0]
                         source = source or 'local'
@@ -313,7 +331,7 @@ class Probe:
             atomic_json(RUNTIME / 'status.json', {
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
                 'timestamp': time.time(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
-                'status': summary, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
+                'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
                                           'eligible': len(a.leaders) == 1, 'priority': priority(a.key, settings)}
                                          for a in apps],
                 'protected_scopes': len(self.protection.applied) if self.protection else 0,
