@@ -2,7 +2,7 @@
 
 ## 조사한 구현과 적용 범위
 
-- [Meta TMO](https://engineering.fb.com/2022/06/20/data-infrastructure/transparent-memory-offloading-more-memory-at-a-fraction-of-the-cost-and-power/): 압박 피드백을 이용해 메모리를 압축 RAM/SSD로 오프로딩합니다. 여기서는 원본 TMO를 이식했다고 주장하지 않습니다. 회수 대상을 제한하고, 압박이 심하면 선제 회수를 중단하는 원칙을 적용합니다.
+- [Meta TMO](https://engineering.fb.com/2022/06/20/data-infrastructure/transparent-memory-offloading-more-memory-at-a-fraction-of-the-cost-and-power/): 압박 피드백을 이용해 메모리를 압축 RAM/SSD로 오프로딩합니다. 이 프로젝트는 제한된 cgroup 회수와 측정 피드백을 구현합니다. 압박이 심하면 선제 회수를 중단하며, TMO 전체 구현이나 동등한 성능을 제공하지는 않습니다.
 - [cgroup v2 memory.reclaim](https://docs.kernel.org/admin-guide/cgroup-v2.html): 특정 cgroup의 페이지 회수 인터페이스입니다. 위임된 쓰기 권한이 있는 사용자 전용 앱 범위만 사용합니다. 권한이 없으면 실행하지 않고 관리창에 이유를 표시합니다.
 - [zram](https://docs.kernel.org/admin-guide/blockdev/zram.html) 및 [zswap](https://docs.kernel.org/admin-guide/mm/zswap.html): 압축은 CPU 비용을 사용해 물리 메모리/디스크 I/O를 절약할 수 있습니다. 압축률과 워크로드에 따라 효과가 다르고 전체 메모리 부족을 없애지는 않습니다.
 - [systemd zram-generator](https://github.com/systemd/zram-generator): 영구적인 압축 스왑 구성에 사용합니다. Ubuntu 26.04의 패키지는 `systemd-zram-generator`입니다. 기존 압축 설정은 덮어쓰지 않습니다.
