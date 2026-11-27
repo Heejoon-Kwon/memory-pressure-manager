@@ -8,6 +8,7 @@ watch:
   force_kill_after_seconds: 8
   systemd_oom_preference: true
 openai:
+  automatic_analysis: false
   api_key: ""
   model: gpt-6-luna
   monthly_budget_usd: 0

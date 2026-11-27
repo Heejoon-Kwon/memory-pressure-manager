@@ -109,9 +109,9 @@ def scenario_text(value):
 
 def event_text(kind, details):
     app = details.get('display_name') or app_name(details.get('app'))
-    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'plan': '사전 AI 계획', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
+    source = {'skill': '회수 규칙', 'ai': 'AI 제안', 'plan': '사전 AI 계획', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
-              'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
+              'action_effective': '앱 종료 후 효과 관측', 'skill_saved': '회수 규칙 저장 / 효과 확인', 'recovery_failed': '효과 미확인 / 규칙 해제',
               'optimization_requested': '종료 없는 페이지 회수 요청', 'optimization_error': '페이지 회수 실행 불가', 'optimization_cancelled': '페이지 회수 검증 취소 · 긴급 대응', 'action_cancelled': '보호 또는 대상 변경 · 평가 취소',
               'action_forced': '응답 없는 앱 강제 종료', 'force_blocked': '강제 종료 차단 · 보호 또는 프로세스 변경',
               'action_requested': '앱 종료 요청', 'action_failed': '앱 종료 요청 실패',
@@ -155,7 +155,10 @@ def event_text(kind, details):
             lines.append('오류 유형: ' + details['error'])
     if details.get('scenario'):
         lines.append(scenario_text(details['scenario']))
-    return titles.get(kind, kind), '\n'.join(lines)
+    title = titles.get(kind, kind)
+    if kind == 'skill_saved' and details.get('app') not in ('reclaim_cgroup','chrome_tab_highest_priority'):
+        title = '앱 종료 후 효과 관측'
+    return title, '\n'.join(lines)
 
 
 class HistoryWindow(Gtk.Window):
@@ -166,7 +169,7 @@ class HistoryWindow(Gtk.Window):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         self.add(root)
         root.pack_start(label('MEMORY PRESSURE MANAGER', 'eyebrow'), False, False, 0)
-        root.pack_start(label('AI 제안과 대응 기록', 'title'), False, False, 0)
+        root.pack_start(label('자동 대응 기록', 'title'), False, False, 0)
         note = label('기록은 이 기기에만 저장됩니다. 최근 2,000건까지 보관하고 최신 200건을 표시합니다.', 'muted')
         note.set_line_wrap(True)
         root.pack_start(note, False, False, 0)
@@ -200,11 +203,11 @@ class HistoryWindow(Gtk.Window):
         try:
             APP_NAMES.update(read_labels(STATE / 'probe.sqlite3'))
             skills, events = read_history(STATE / 'probe.sqlite3')
-            self.content.pack_start(label(f'현재 저장된 스킬 · {len(skills)}개', 'eyebrow'), False, False, 0)
+            self.content.pack_start(label(f'저장된 회수 규칙 · {len(skills)}개', 'eyebrow'), False, False, 0)
             if not skills:
-                self.card('저장된 스킬 없음', '대응 후 메모리 회복이 확인되면 저장됩니다.')
+                self.card('저장된 회수 규칙 없음', '개별 앱 종료는 재사용 규칙으로 저장하지 않습니다.')
             for scenario, app in skills:
-                self.card(app_name(app) + (' 규칙' if app in ('chrome_tab_highest_priority', 'chrome_web_app_close') else ' 종료 요청'), scenario_text(scenario))
+                self.card(app_name(app) + (' 규칙' if app in ('reclaim_cgroup','chrome_tab_highest_priority') else ' 종료 요청'), scenario_text(scenario))
             self.content.pack_start(label('최근 활동', 'eyebrow'), False, False, 0)
             if not events:
                 self.card('아직 기록이 없습니다', '이 업데이트 이후 발생하는 AI 제안과 대응부터 기록됩니다.')
@@ -363,7 +366,7 @@ class Window(Gtk.Window):
         help_text = label('숫자가 작을수록 중요 · 보호를 켜면 자동 정리 제외', 'muted')
         help_text.set_line_wrap(True)
         root.pack_start(help_text, False, False, 0)
-        self.history_button = Gtk.Button(label='대응 기록 · 저장된 스킬')
+        self.history_button = Gtk.Button(label='대응 기록 · 회수 규칙')
         self.history_button.get_style_context().add_class('history-button')
         self.history_button.connect('clicked', self.show_history)
         root.pack_start(self.history_button, False, False, 0)
@@ -551,7 +554,7 @@ class Window(Gtk.Window):
             kernel = data.get('kernel_protection', {})
             protection = f"커널 보호 {kernel.get('applied',0)}개 · OOM 데몬 보호 {kernel.get('oomd_scopes',0)}개" if kernel.get('installed') else '커널 보호 미적용 · 관리자 헬퍼 설치 필요'
             self.ai_note.set_text(protection + '\nAI · ' + data.get('ai_status', '연결 상태 확인 필요') + '\n' + data.get('optimization_status', ''))
-            self.history_button.set_label(f"대응 기록 보기    ·    저장된 스킬 {data['learned_skills']}")
+            self.history_button.set_label(f"대응 기록 보기    ·    회수 규칙 {data['learned_skills']}")
         saved = read_priorities(STATE / 'priorities.json')
         items = data.get('apps', [])
         self.apps_heading.set_text(f'앱 · 프로세스  {len(items)}')

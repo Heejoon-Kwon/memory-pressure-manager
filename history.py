@@ -23,7 +23,7 @@ def read_history(database, limit=200):
         return [], []
     with sqlite3.connect(f'{database.resolve().as_uri()}?mode=ro', uri=True, timeout=3) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        skills = db.execute('SELECT scenario, app FROM skills ORDER BY app, scenario').fetchall() if 'skills' in tables else []
+        skills = db.execute("SELECT scenario, app FROM skills WHERE app IN ('reclaim_cgroup','chrome_tab_highest_priority') ORDER BY app, scenario").fetchall() if 'skills' in tables else []
         events = db.execute('SELECT timestamp, kind, details FROM history ORDER BY id DESC LIMIT ?', (limit,)).fetchall() if 'history' in tables else []
     return skills, events
 

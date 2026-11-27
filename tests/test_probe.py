@@ -107,13 +107,13 @@ class ProbeTests(unittest.TestCase):
             db = Path(tmp) / 'probe.db'
             skills = Skills(db)
             skills.save('["low-available", false, ["chrome"]]', 'chrome')
-            self.assertEqual(len(read_history(db)[0]), 1)
+            self.assertEqual(len(read_history(db)[0]), 0)
             self.assertEqual(read_history(db)[1], [])
             initialize(db)
             record(db, 'ai_proposal', {'app': 'chrome'})
             record(db, 'action_requested', {'app': 'chrome', 'source': 'skill'})
             current, events = read_history(db)
-            self.assertEqual(current[0][1], 'chrome')
+            self.assertEqual(current, [])
             self.assertEqual([event[1] for event in events], ['action_requested', 'ai_proposal'])
             self.assertNotIn('api_key', str(events))
 
@@ -209,7 +209,10 @@ class ProbeTests(unittest.TestCase):
             db = Path(tmp) / 'probe.db'
             skills = Skills(db)
             skills.save(scenario, 'chrome')
-            self.assertEqual(Skills(db).get(scenario, apps).key, 'chrome')
+            self.assertIsNone(Skills(db).get(scenario, apps))
+            import sqlite3
+            with sqlite3.connect(db) as connection:
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM termination_records').fetchone()[0], 1)
             self.assertIsNone(skills.get(scenario, [a for a in apps if a.key != 'chrome']))
             skills.discard(scenario)
             self.assertIsNone(skills.get(scenario, apps))

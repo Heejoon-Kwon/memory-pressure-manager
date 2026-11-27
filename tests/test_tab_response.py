@@ -65,7 +65,7 @@ class TabResponseTests(unittest.TestCase):
             self.assertEqual(changes[0]['action'], 'close_web_app')
             report_action(base, {'profile':PROFILE,'token':TOKEN,'id':1,'action':'close_web_app','result':'done'})
             controller.tick(Sample(16*GIB, 2*GIB, 0, 0, 1, 0), 'normal', 31)
-            self.assertEqual(owner.skills.count(), 1)
+            self.assertEqual(owner.skills.count(), 0)
 
     def test_emergency_tab_action_does_not_wait_for_api(self):
         with tempfile.TemporaryDirectory() as tmp:

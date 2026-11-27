@@ -42,7 +42,7 @@ class TabResponse:
                        'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)}
             if recovered:
                 o.skills.save(trial['scenario'], trial['rule'])
-                o.event('skill_saved', details)
+                o.event('action_effective' if trial['rule'] == WEB_RULE else 'skill_saved', details)
                 self.summary = '탭 회수 후 메모리 회복 확인 · 스킬 저장'
             else:
                 o.skills.discard(trial['scenario'])

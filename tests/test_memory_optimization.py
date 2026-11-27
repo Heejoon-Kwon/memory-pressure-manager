@@ -40,6 +40,19 @@ class OptimizationTests(unittest.TestCase):
                 configure_memory.main()
             run.assert_not_called()
 
+    def test_termination_rule_migration_preserves_evidence(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'db'
+            with sqlite3.connect(path) as db:
+                db.execute('CREATE TABLE skills (scenario TEXT PRIMARY KEY, app TEXT NOT NULL)')
+                db.execute('INSERT INTO skills VALUES (?,?)', ('old-context','terminal'))
+            rules=Skills(path)
+            self.assertEqual(rules.count(),0)
+            self.assertIsNone(rules.get('old-context',[]))
+            with sqlite3.connect(path) as db:
+                self.assertEqual(db.execute('SELECT scenario,app FROM termination_records').fetchall(), [('old-context','terminal')])
+
     def test_retrieval_is_relevant_and_bounded(self):
         docs = retrieve([{'id':RULE}])
         self.assertTrue(any(d['id']=='reclaim' for d in docs))
@@ -52,7 +65,7 @@ class OptimizationTests(unittest.TestCase):
             skills=Skills(Path(tmp)/'db')
             old=json.dumps(['stall',True,['chrome','slack']]); new=json.dumps(['stall',True,['chrome']])
             skills.save(old,'chrome')
-            self.assertEqual(skills.get(new,apps[:1]).key,'chrome')
+            self.assertIsNone(skills.get(new,apps[:1]))
             self.assertIsNone(skills.get(new,[a for a in apps if a.key=='slack']))
             skills.discard(new)
             self.assertEqual(skills.count(),0)

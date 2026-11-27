@@ -59,7 +59,7 @@ def overrides():
 
 
 class Skills:
-    """Only observed successes are saved. Failed entries are removed."""
+    """Store local reclaim rules separately from non-executable termination evidence."""
     def __init__(self, database):
         self.database = database
         self.matches = {}
@@ -67,25 +67,21 @@ class Skills:
             db.execute('CREATE TABLE IF NOT EXISTS app_labels (id TEXT PRIMARY KEY, name TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS outcomes (app TEXT PRIMARY KEY, successes INTEGER, failures INTEGER, gain_mib REAL)')
             db.execute('CREATE TABLE IF NOT EXISTS skills (scenario TEXT PRIMARY KEY, app TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS termination_records (scenario TEXT, app TEXT, PRIMARY KEY(scenario,app))')
+            db.execute("INSERT OR IGNORE INTO termination_records SELECT scenario,app FROM skills WHERE app NOT IN ('reclaim_cgroup','chrome_tab_highest_priority')")
+            db.execute("DELETE FROM skills WHERE app NOT IN ('reclaim_cgroup','chrome_tab_highest_priority')")
 
     def get(self, scenario, candidates):
-        with sqlite3.connect(self.database) as db:
-            rows = db.execute('SELECT scenario, app FROM skills ORDER BY scenario=? DESC', (scenario,)).fetchall()
-        for stored, key in rows:
-            try:
-                compatible = stored == scenario or json.loads(stored)[:2] == json.loads(scenario)[:2]
-            except (ValueError, TypeError):
-                compatible = False
-            app = next((app for app in candidates if app.key == key), None)
-            if compatible and app:
-                self.matches[scenario] = stored
-                return app
+        # App termination outcomes are evidence, never executable learned skills.
         return None
 
     def save(self, scenario, key):
         self.matches.pop(scenario, None)
         with sqlite3.connect(self.database) as db:
-            db.execute('INSERT OR REPLACE INTO skills VALUES (?,?)', (scenario, key))
+            if key in ('reclaim_cgroup','chrome_tab_highest_priority'):
+                db.execute('INSERT OR REPLACE INTO skills VALUES (?,?)', (scenario, key))
+            else:
+                db.execute('INSERT OR IGNORE INTO termination_records VALUES (?,?)', (scenario,key))
 
     def record_outcome(self, key, success, gain):
         with sqlite3.connect(self.database) as db:
@@ -218,6 +214,7 @@ class Probe:
         ai = config.get('openai', {})
         self.budget = Budget(database, round(float(ai.get('monthly_budget_usd', 0)) * 1_000_000))
         self.advisor = Advisor(ai, self.budget)
+        self.automatic_analysis = ai.get('automatic_analysis', False) is True
         self.stop = threading.Event()
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.tab_response = TabResponse(self, RUNTIME)
@@ -226,8 +223,8 @@ class Probe:
     def event(self, kind, details):
         try:
             record(self.database, kind, details)
-            if kind in ('skill_saved','recovery_failed') and hasattr(self,'skills'):
-                self.skills.record_outcome(details['app'], kind=='skill_saved', details.get('after_mib',0)-details.get('before_mib',0))
+            if kind in ('skill_saved','action_effective','recovery_failed') and hasattr(self,'skills'):
+                self.skills.record_outcome(details['app'], kind in ('skill_saved','action_effective'), details.get('after_mib',0)-details.get('before_mib',0))
         except (sqlite3.Error, OSError):
             LOG.warning("대응 이력을 저장하지 못했습니다")
 
@@ -257,7 +254,7 @@ class Probe:
         unsuccessful_apps = set()
         summary = '메모리 감시 중'
         ai_disabled_reported = False
-        ai_status = '기록 분석 대기 · 대응은 로컬 실행' if self.advisor.enabled else 'API 키 또는 월 예산 확인'
+        ai_status = '자동 API 호출 꺼짐 · 로컬 대응 실행' if not self.automatic_analysis else '기록 분석 대기 · 대응은 로컬 실행' if self.advisor.enabled else 'API 키 또는 월 예산 확인'
         last_level = None
         postmortem = None
         while not self.stop.is_set():
@@ -267,7 +264,7 @@ class Probe:
             emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
             if emergency:
                 level = 'critical'
-            if level == 'normal' and last_level == 'critical' and self.advisor.enabled and (postmortem is None or postmortem.done()):
+            if level == 'normal' and last_level == 'critical' and self.automatic_analysis and self.advisor.enabled and (postmortem is None or postmortem.done()):
                 options = ResponseAgent.candidates(apps, settings)[:5]
                 if options:
                     postmortem = self.executor.submit(self.ask_advisor, scenario_for(sample, previous, options), snapshot(sample), [{'id':a.key, 'rss_mib':round(a.rss/MIB)} for a in options])
@@ -330,8 +327,8 @@ class Probe:
                 key = trial['scenario']
                 if recovery_verified(trial['before'], sample, self.threshold, exited):
                     self.skills.save(key, trial['app'])
-                    self.event('skill_saved', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'display_name': trial.get('display_name'), 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
-                    summary = '가용 메모리 회복 확인 · 대응 기록 저장'
+                    self.event('action_effective', {'scenario': key, 'app': trial['app'], 'source': trial['source'], 'display_name': trial.get('display_name'), 'before_mib': round(trial['before'].available / MIB), 'after_mib': round(sample.available / MIB)})
+                    summary = '앱 종료 후 메모리 개선 관측 · 효과 기록 저장'
                     notify(summary)
                 else:
                     self.skills.discard(key)

@@ -91,3 +91,28 @@ class PreventionTests(unittest.TestCase):
                     owner.advisor.advise.assert_not_called()
             finally:
                 owner.executor.shutdown()
+
+    def test_default_auto_analysis_does_not_spend_after_recovery(self):
+        from probe import Probe
+        from test_probe import process
+        from agents import group_apps
+        from unittest.mock import Mock
+        class Stop:
+            n=0
+            def is_set(self): return self.n>=4
+            def wait(self,_): self.n+=1
+        with tempfile.TemporaryDirectory() as tmp, patch('probe.RUNTIME',Path(tmp)), patch('probe.overrides',return_value={'slack':500}):
+            owner=Probe({'watch':{'systemd_oom_preference':False},'openai':{'api_key':'test','monthly_budget_usd':1}},Path(tmp)/'db')
+            owner.stop=Stop()
+            owner.watch.sample=Mock(side_effect=[Sample(16*GIB,GIB,0,0,0,0)]*3+[Sample(16*GIB,8*GIB,0,0,0,0)])
+            owner.analysis.applications=Mock(return_value=group_apps([process(999999,'slack',rss=400)]))
+            owner.advisor.advise=Mock(side_effect=AssertionError('API used on hot path'))
+            owner.tab_response.tick=Mock(return_value=False)
+            owner.reclaim_response.tick=Mock(return_value=False)
+            try:
+                with patch('probe.ResponseAgent.close') as close, patch('probe.notify'), patch('probe.time.monotonic',side_effect=[0,1,2,3]):
+                    owner.run()
+                    close.assert_called_once()
+                    owner.advisor.advise.assert_not_called()
+            finally:
+                owner.executor.shutdown()
