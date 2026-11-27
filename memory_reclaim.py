@@ -133,11 +133,6 @@ class ReclaimResponse:
             learned = db.execute('SELECT app FROM skills WHERE scenario=?',(scenario,)).fetchone()
         if learned and learned[0] == RULE:
             return self.start(app, sample, now, scenario, 'skill')
-        if o.advisor.enabled and not self.api_failed:
-            self.pending = ('ai', o.executor.submit(o.ask_advisor, scenario,
-                {'available_mib':round(sample.available/MIB),'psi_full_avg10':sample.full,'batch_mib':self.batch//MIB,
-                 'swappiness':self.swappiness,'non_terminating':True}, [{'id':RULE,'action':'bounded_page_reclaim'}]),app,scenario,'ai')
-            return True
         return self.start(app,sample,now,scenario,'local')
 
     def start(self, app, sample, now, scenario, source):

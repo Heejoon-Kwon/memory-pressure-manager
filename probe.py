@@ -28,6 +28,8 @@ from tab_response import TabResponse
 from build_info import BUILD
 from memory_knowledge import retrieve
 from memory_reclaim import ReclaimResponse
+from early_pressure import EarlyPressure
+from protection_client import publish, status as protection_status
 
 LOG = logging.getLogger('probe')
 STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'probe'
@@ -63,6 +65,7 @@ class Skills:
         self.matches = {}
         with sqlite3.connect(database) as db:
             db.execute('CREATE TABLE IF NOT EXISTS app_labels (id TEXT PRIMARY KEY, name TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS outcomes (app TEXT PRIMARY KEY, successes INTEGER, failures INTEGER, gain_mib REAL)')
             db.execute('CREATE TABLE IF NOT EXISTS skills (scenario TEXT PRIMARY KEY, app TEXT NOT NULL)')
 
     def get(self, scenario, candidates):
@@ -84,6 +87,19 @@ class Skills:
         with sqlite3.connect(self.database) as db:
             db.execute('INSERT OR REPLACE INTO skills VALUES (?,?)', (scenario, key))
 
+    def record_outcome(self, key, success, gain):
+        with sqlite3.connect(self.database) as db:
+            db.execute('INSERT INTO outcomes VALUES (?,?,?,?) ON CONFLICT(app) DO UPDATE SET successes=successes+excluded.successes, failures=failures+excluded.failures, gain_mib=(gain_mib+excluded.gain_mib)/2',
+                       (key,int(success),int(not success),max(0,gain)))
+
+    def rank(self, candidates):
+        with sqlite3.connect(self.database) as db:
+            results={key:(ok,bad,gain) for key,ok,bad,gain in db.execute('SELECT * FROM outcomes')}
+        def score(app):
+            ok,bad,gain=results.get(app.key,(0,0,0))
+            return (-(ok+1)/(ok+bad+2), -max(gain,app.rss/MIB*.1), -app.rss, app.key)
+        return sorted(candidates,key=score)
+
     def count(self):
         with sqlite3.connect(self.database) as db:
             return db.execute('SELECT COUNT(*) FROM skills').fetchone()[0]
@@ -102,7 +118,7 @@ class Advisor:
 
     @property
     def enabled(self):
-        return bool(self.model and self.key and self.budget.limit)
+        return bool(self.model and self.key and self.budget.limit and not getattr(self, 'failed', False))
 
     def advise(self, telemetry, candidates):
         from openai import OpenAI
@@ -114,7 +130,14 @@ class Advisor:
                         'or choose none. Only the listed identifiers may be returned. '
                         'Use observed pressure and provided resource data; tab RSS may be unavailable. '
                         'You cannot execute actions or provide commands.')
-        payload = json.dumps({'memory': telemetry, 'eligible_apps': candidates, 'reference_policy': retrieve(candidates)}, ensure_ascii=False)
+        evidence = []
+        with sqlite3.connect(self.budget.path) as db:
+            try:
+                rows = db.execute("SELECT kind, details FROM history WHERE kind IN ('skill_saved','recovery_failed','action_cancelled') ORDER BY id DESC LIMIT 12").fetchall()
+                evidence = [{'outcome':kind, 'measurement':json.loads(details)} for kind,details in rows]
+            except sqlite3.Error:
+                pass
+        payload = json.dumps({'history_evidence': evidence, 'memory': telemetry, 'eligible_apps': candidates, 'reference_policy': retrieve(candidates)}, ensure_ascii=False)
         schema = {'type': 'object', 'properties': {'app': {'type': 'string',
                    'enum': ['none', *choices]}}, 'required': ['app'], 'additionalProperties': False}
         input_rate, output_rate = rates_for(self.model)
@@ -189,6 +212,7 @@ class Probe:
         initialize(database)
         self.watch = WatchAgent()
         self.analysis = AnalysisAgent(self.threshold, confirm)
+        self.early = EarlyPressure(config)
         self.protection = OOMPreference() if cfg.get('systemd_oom_preference', True) else None
         self.skills = Skills(database)
         ai = config.get('openai', {})
@@ -202,6 +226,8 @@ class Probe:
     def event(self, kind, details):
         try:
             record(self.database, kind, details)
+            if kind in ('skill_saved','recovery_failed') and hasattr(self,'skills'):
+                self.skills.record_outcome(details['app'], kind=='skill_saved', details.get('after_mib',0)-details.get('before_mib',0))
         except (sqlite3.Error, OSError):
             LOG.warning("대응 이력을 저장하지 못했습니다")
 
@@ -210,8 +236,10 @@ class Probe:
         try:
             choice = self.advisor.advise(telemetry, candidates)
         except Exception as exc:
+            self.advisor.failed = True
             self.event("ai_error", {"scenario": scenario, "error": type(exc).__name__})
             raise
+        self.planned_choice = choice
         self.event("ai_proposal", {"scenario": scenario, "app": choice, "model": self.advisor.model})
         return choice
 
@@ -229,15 +257,20 @@ class Probe:
         unsuccessful_apps = set()
         summary = '메모리 감시 중'
         ai_disabled_reported = False
-        ai_status = '설정됨 · 위기 대응 시 호출' if self.advisor.enabled else 'API 키 또는 월 예산 확인'
+        ai_status = '기록 분석 대기 · 대응은 로컬 실행' if self.advisor.enabled else 'API 키 또는 월 예산 확인'
         last_level = None
+        postmortem = None
         while not self.stop.is_set():
             now = time.monotonic()
             sample = self.watch.sample()
-            level = self.analysis.pressure(sample)
+            level = self.early.classify(sample, self.analysis.pressure(sample), now)
             emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
             if emergency:
                 level = 'critical'
+            if level == 'normal' and last_level == 'critical' and self.advisor.enabled and (postmortem is None or postmortem.done()):
+                options = ResponseAgent.candidates(apps, settings)[:5]
+                if options:
+                    postmortem = self.executor.submit(self.ask_advisor, scenario_for(sample, previous, options), snapshot(sample), [{'id':a.key, 'rss_mib':round(a.rss/MIB)} for a in options])
             if level != last_level and level != 'normal':
                 self.event('pressure_' + level, {'memory': snapshot(sample)})
             last_level = level
@@ -246,10 +279,11 @@ class Probe:
                 apps = self.analysis.applications()
                 with sqlite3.connect(self.database) as db:
                     db.executemany('INSERT OR REPLACE INTO app_labels VALUES (?,?)', [(a.key, a.name) for a in apps])
-                next_inventory = now + 15
+                next_inventory = now + (2 if level != 'normal' else 5)
                 settings = current_settings
                 if self.protection:
                     self.protection.sync(apps, settings)
+            publish(RUNTIME / 'protection.json', apps, settings, atomic_json)
             if advice and advice[1].done() and not ResponseAgent.candidates(apps, settings):
                 # A completed app request must not block tab handling after its app disappeared.
                 advice = None
@@ -272,6 +306,15 @@ class Probe:
                     self.event('force_blocked', {'app': trial['app'], 'display_name': trial['target'].name})
                     self.event('action_cancelled', {'app':trial['app'], 'display_name':trial['target'].name})
                     trial = None
+            if trial and sample.available - trial['before'].available >= 32*MIB:
+                try:
+                    exited_now = get_process(trial['process'].pid)
+                    if not exited_now or exited_now.started != trial['process'].started:
+                        trial['verify_at'] = now
+                except psutil.NoSuchProcess:
+                    trial['verify_at'] = now
+                except (psutil.Error,OSError):
+                    pass
             if trial and now >= trial['verify_at']:
                 try:
                     proc = get_process(trial['process'].pid)
@@ -320,9 +363,13 @@ class Probe:
                 else:
                     best_priority = priority(candidates[0].key, settings)
                     candidates = [a for a in candidates if priority(a.key, settings) == best_priority]
+                    candidates = self.skills.rank(candidates)
                     scenario = scenario_for(sample, previous, candidates)
                     app = self.skills.get(scenario, candidates)
                     source = 'skill' if app else None
+                    if app is None:
+                        app = next((a for a in candidates if a.key == getattr(self,'planned_choice',None)),None)
+                        if app: source = 'plan'
                     if not self.advisor.enabled and not ai_disabled_reported:
                         reason = 'no_api_key' if not self.advisor.key else 'zero_budget'
                         self.event('ai_disabled', {'reason': reason})
@@ -357,20 +404,14 @@ class Probe:
                         declined = False
                         used_advice = True
                         source = 'emergency'
-                    if not app and not emergency and not declined and not advice and not used_advice and self.advisor.enabled:
-                        used_advice = True
-                        payload = [{'id': a.key, 'rss_mib': round(a.rss / MIB)} for a in candidates]
-                        advice = (scenario, self.executor.submit(self.ask_advisor, scenario, snapshot(sample), payload))
-                        summary = '메모리 압박 분석 중'
-                        ai_status = 'AI 분석 요청 중'
-                    elif app or (not advice and not declined):
+                    if app or (not advice and not declined):
                         app = app or candidates[0]
                         source = source or 'local'
                         # Check the policy again immediately before signaling.
                         current = overrides()
                         fresh = [a for a in ResponseAgent.candidates(apps, current)
                                  if a.key not in unsuccessful_apps]
-                        next_action = now + (self.interval if emergency else self.cooldown)
+                        next_action = now + (2 if level == 'critical' else self.cooldown)
                         if fresh and priority(app.key, current) == priority(fresh[0].key, current):
                             try:
                                 ResponseAgent.close(app, current)
@@ -385,17 +426,20 @@ class Probe:
                                 notify(summary)
                                 trial = {'scenario': scenario, 'app': app.key, 'process': app.leaders[0],
                                          'before': sample, 'source': source, 'display_name': app.name, 'target': app, 'forced': False,
-                                         'force_at': now + (2 if emergency else self.force_after), 'verify_at': now + self.verify_seconds}
+                                         'force_at': now + (2 if emergency else self.force_after), 'verify_at': now + (6 if emergency else max(self.force_after + 2, min(self.verify_seconds, 6)))}
                     elif declined:
-                        next_action = now + (self.interval if emergency else self.cooldown)
+                        next_action = now + (2 if level == 'critical' else self.cooldown)
                         summary = '현재 대응 후보의 종료 보류'
             elif level != 'critical' and advice and advice[1].done():
                 advice = None
 
+            guard = protection_status()
+            protected_pids = set(guard.get('protected_pids', []))
             atomic_json(RUNTIME / 'status.json', {
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
-                'timestamp': time.time(), 'build': BUILD, 'source_dir': str(Path(__file__).resolve().parent), 'pid': os.getpid(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
+                'kernel_protection': guard, 'timestamp': time.time(), 'build': BUILD, 'source_dir': str(Path(__file__).resolve().parent), 'pid': os.getpid(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
                 'optimization_status': self.reclaim_response.capability, 'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
+                                          'kernel_pid_count': sum(p.pid in protected_pids for p in a.processes), 'process_count':len(a.processes),
                                           'blocked_reason': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps),
                                           'eligible': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps) is None, 'priority': priority(a.key, settings) if a.managed else 0}
                                          for a in apps],
@@ -403,11 +447,12 @@ class Probe:
                 'learned_skills': self.skills.count(),
             })
             previous = sample
-            self.stop.wait(self.interval)
+            self.stop.wait(min(self.interval, 1 if level != 'normal' else 2))
 
     def close(self):
         self.stop.set()
         (RUNTIME / 'status.json').unlink(missing_ok=True)
+        (RUNTIME / 'protection.json').unlink(missing_ok=True)
         if self.protection:
             self.protection.stop()
         self.executor.shutdown(wait=False, cancel_futures=True)

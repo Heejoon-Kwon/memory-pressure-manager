@@ -22,6 +22,7 @@ def inspect(config, priorities, database):
         'diagnostic_source': str(Path(__file__).resolve().parent),
         'api_key_configured': bool(settings.get('api_key') or __import__('os').environ.get('OPENAI_API_KEY')),
         'model': model,
+        'prevention': config.get('prevention', {'enabled':True,'action_available_percent':20,'warning_available_percent':25}),
         'writable_reclaim_app_scopes': reclaimable,
         'monthly_budget_usd': settings.get('monthly_budget_usd', 0),
         'threshold_available_percent': watch.get('critical_available_percent', 8),
@@ -48,6 +49,8 @@ def inspect(config, priorities, database):
         result['running_build_matches'] = state.get('build') == BUILD
     except (ValueError, OSError):
         result['running_instance'] = None
+    from protection_client import status as guard_status
+    result['kernel_protection'] = guard_status()
     from chrome_tabs import snapshots
     profiles = snapshots(runtime)
     result['chrome_profiles'] = [{'build': p.get('build'), 'tabs': len(p['tabs']), 'web_apps': sum(t.get('standalone', False) for t in p['tabs'])} for p in profiles]

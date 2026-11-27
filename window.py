@@ -109,7 +109,7 @@ def scenario_text(value):
 
 def event_text(kind, details):
     app = details.get('display_name') or app_name(details.get('app'))
-    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
+    source = {'skill': '저장된 스킬', 'ai': 'AI 제안', 'plan': '사전 AI 계획', 'local': '로컬 기본 판단', 'emergency': '긴급 로컬 대응'}.get(details.get('source'), '')
     titles = {'ai_request': 'AI 분석 요청', 'ai_proposal': 'AI 제안', 'ai_error': 'AI 분석 실패',
               'skill_saved': '스킬 저장 / 회복 확인', 'recovery_failed': '회복 미확인 / 스킬 해제',
               'optimization_requested': '종료 없는 페이지 회수 요청', 'optimization_error': '페이지 회수 실행 불가', 'optimization_cancelled': '페이지 회수 검증 취소 · 긴급 대응', 'action_cancelled': '보호 또는 대상 변경 · 평가 취소',
@@ -548,7 +548,9 @@ class Window(Gtk.Window):
             self.cost.set_text(f"${data['cost_micro'] / 1e6:.4f}")
             self.note.set_text(data['status'] if data.get('build') == BUILD else '구버전 서비스 실행 중 · 재설치 필요')
             self.note.set_tooltip_text('실행 위치: ' + data.get('source_dir', '구버전: 위치 정보 없음') + '\n빌드: ' + data.get('build', '구버전'))
-            self.ai_note.set_text('AI · ' + data.get('ai_status', '연결 상태 확인 필요') + '\n' + data.get('optimization_status', ''))
+            kernel = data.get('kernel_protection', {})
+            protection = f"커널 보호 {kernel.get('applied',0)}개 · OOM 데몬 보호 {kernel.get('oomd_scopes',0)}개" if kernel.get('installed') else '커널 보호 미적용 · 관리자 헬퍼 설치 필요'
+            self.ai_note.set_text(protection + '\nAI · ' + data.get('ai_status', '연결 상태 확인 필요') + '\n' + data.get('optimization_status', ''))
             self.history_button.set_label(f"대응 기록 보기    ·    저장된 스킬 {data['learned_skills']}")
         saved = read_priorities(STATE / 'priorities.json')
         items = data.get('apps', [])
@@ -567,6 +569,8 @@ class Window(Gtk.Window):
             size = item['rss_mib']
             entry['memory'].set_text(f'{size / 1024:.1f} GiB' if size >= 1024 else f'{size:,} MiB')
             reason = REASONS.get(item.get('blocked_reason'), '자동 대응 가능')
+            if item['priority'] == 0 and item.get('blocked_reason') == 'protected':
+                reason += f" · 커널 {item.get('kernel_pid_count',0)}/{item.get('process_count',0)}"
             entry['detail'].set_text(reason)
             entry['detail'].set_tooltip_text(reason)
             self.update_controls(entry, saved.get(key, item['priority']), item.get('blocked_reason') != 'system_process')

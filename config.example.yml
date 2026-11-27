@@ -19,3 +19,10 @@ memory_optimization:
     size_percent: 50
     max_mib: 8192
     compression: zstd
+
+prevention:
+  enabled: true
+  warning_available_percent: 25
+  action_available_percent: 20
+  release_available_percent: 27
+  prediction_seconds: 30

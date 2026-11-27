@@ -89,16 +89,6 @@ class TabResponse:
             return self.act(sample, level, now, 'skill')
         if emergency:
             return self.act(sample, level, now, 'emergency')
-        if o.advisor.enabled and not self.ai_failed:
-            telemetry = {'available_mib': round(sample.available / MIB), 'total_mib': round(sample.total / MIB),
-                         'psi_some_avg10': sample.some, 'psi_full_avg10': sample.full,
-                         'eligible_tab_count': len(eligible), 'highest_discard_priority': eligible[0]['priority'],
-                         'action': 'close one unfocused standalone web-app window' if eligible[0].get('standalone') else 'discard one inactive unprotected browser tab; reload when revisited',
-                         'tab_rss_available': False}
-            self.requested_rule = rule_for(eligible[0])
-            self.future = o.executor.submit(o.ask_advisor, scenario, telemetry, [{'id': rule_for(eligible[0]), 'action': 'close_web_app' if eligible[0].get('standalone') else 'discard_tab'}])
-            self.summary = 'AI에 Chrome 탭 회수 판단 요청'
-            return True
         return self.act(sample, level, now, 'local')
 
     @staticmethod
@@ -121,9 +111,9 @@ class TabResponse:
             self.summary = 'Chrome 탭 상태 변경 · 재확인 대기'
             return True
         emergency = sample.available_percent <= 3 or ((sample.full or 0) >= 10 and sample.available_percent < 8)
-        self.next_action = now + (self.owner.interval if emergency else self.owner.cooldown)
+        self.next_action = now + 3
         self.trial = {'tab': tab, 'before': sample, 'scenario': scenario, 'source': source,
-                      'verify_at': now + self.owner.verify_seconds, 'requested_at': time.time(), 'rule': rule_for(tab)}
+                      'verify_at': now + min(self.owner.verify_seconds, 6), 'requested_at': time.time(), 'rule': rule_for(tab)}
         self.owner.event('action_requested', {'scenario': scenario, 'app': rule_for(tab), 'source': source})
         self.summary = 'Chrome 탭 회수 요청 · 회복 검증 대기'
         return True

@@ -16,7 +16,7 @@ TAB = {'id': 1, 'token': TOKEN, 'title': 'private title', 'priority': 500, 'supp
 
 
 class TabResponseTests(unittest.TestCase):
-    def test_ai_execute_verify_learn_reuse_and_invalidate(self):
+    def test_local_execute_verify_learn_reuse_and_invalidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             db = base / 'skills.db'
@@ -39,7 +39,7 @@ class TabResponseTests(unittest.TestCase):
             self.assertEqual(owner.skills.count(), 1)
             sync(base, PROFILE, [TAB])
             self.assertTrue(controller.tick(low, 'critical', 100))  # learned rule reused
-            self.assertEqual(owner.executor.submit.call_count, 1)
+            self.assertEqual(owner.executor.submit.call_count, 0)
             self.assertEqual(controller.trial['source'], 'skill')
             sync(base, PROFILE, [{**TAB, 'discarded': True}])
             controller.tick(low, 'critical', 126)  # no observed recovery

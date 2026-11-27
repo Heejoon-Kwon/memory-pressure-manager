@@ -35,7 +35,6 @@ EXECUTABLES = {
 JAVA_PREFIXES = {
     'idea': 'idea', 'datagrip': 'datagrip', 'pycharm': 'pycharm', 'webstorm': 'webstorm',
 }
-IDE_DEFAULTS = {'idea', 'code', 'datagrip', 'codium'}
 HELPER_FLAGS = ('--type=', '--utility-sub-type=', '-contentproc', '--ms-enable-electron-run-as-node')
 USER_SCOPE = re.compile(r'app-(?!gnome-org\.gnome\.Shell)[\w.\\:@+-]+\.scope\Z', re.ASCII)
 
@@ -235,7 +234,7 @@ class AnalysisAgent:
 
 
 def priority(key, overrides):
-    return overrides.get(key, 0 if key in IDE_DEFAULTS else 500)
+    return overrides.get(key, 500)
 
 
 def chrome_tab_management_enabled():
