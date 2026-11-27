@@ -34,5 +34,5 @@ class EarlyPressure:
         elif sample.available_percent >= self.release and (sample.full or 0) < 1:
             self.active = False
         if self.active:
-            return 'critical'
+            return 'critical' if level == 'critical' else 'warning'
         return 'warning' if sample.available_percent <= self.warning else level

@@ -271,6 +271,7 @@ class Probe:
                 options = ResponseAgent.candidates(apps, settings)[:5]
                 if options:
                     postmortem = self.executor.submit(self.ask_advisor, scenario_for(sample, previous, options), snapshot(sample), [{'id':a.key, 'rss_mib':round(a.rss/MIB)} for a in options])
+            termination_allowed = level == 'critical' and sample.available_percent <= min(self.threshold, 8)
             if level != last_level and level != 'normal':
                 self.event('pressure_' + level, {'memory': snapshot(sample)})
             last_level = level
@@ -294,6 +295,9 @@ class Probe:
                 used_advice = False
                 declined_scenarios.clear()
                 unsuccessful_apps.clear()
+            if trial and not termination_allowed and not trial.get('forced'):
+                trial['forced'] = True
+                self.event('action_cancelled', {'app':trial['app'], 'display_name':trial['target'].name, 'reason':'force_cancelled_pressure_relieved'})
             if trial and self.allow_force and not trial.get('forced') and now >= trial['force_at']:
                 trial['forced'] = True
                 try:
@@ -345,12 +349,12 @@ class Probe:
                     summary = self.reclaim_response.summary
                     ai_status = '메모리 회수 · ' + summary
             tab_busy = reclaim_busy
-            if not trial and not reclaim_busy and advice is None and now >= next_action:
+            if not trial and not reclaim_busy and advice is None and now >= next_action and (self.early.active or level == 'critical' or self.tab_response.trial):
                 tab_busy = self.tab_response.tick(sample, level, now)
                 if tab_busy:
                     summary = self.tab_response.summary
                     ai_status = '탭 대응 · ' + summary
-            if level == 'critical' and not trial and not tab_busy and now >= next_action:
+            if termination_allowed and not trial and not tab_busy and now >= next_action:
                 candidates = [app for app in ResponseAgent.candidates(apps, settings)
                               if app.key not in unsuccessful_apps]
                 if not candidates:
@@ -438,6 +442,7 @@ class Probe:
             atomic_json(RUNTIME / 'status.json', {
                 **snapshot(sample), 'usage': round(100 - sample.available_percent), 'level': level,
                 'kernel_protection': guard, 'timestamp': time.time(), 'build': BUILD, 'source_dir': str(Path(__file__).resolve().parent), 'pid': os.getpid(), 'cost_micro': self.budget.monthly()['estimated_microusd'],
+                'termination_allowed': termination_allowed, 'discard_allowed': self.early.active or level == 'critical',
                 'optimization_status': self.reclaim_response.capability, 'status': summary, 'ai_status': ai_status, 'apps': [{'id': a.key, 'name': a.name, 'rss_mib': round(a.rss / MIB),
                                           'kernel_pid_count': sum(p.pid in protected_pids for p in a.processes), 'process_count':len(a.processes),
                                           'blocked_reason': ResponseAgent.blocked_reason(a, settings, unsuccessful_apps),

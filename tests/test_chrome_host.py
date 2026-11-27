@@ -40,9 +40,9 @@ class NativeHostTests(unittest.TestCase):
 
     def test_status_rejects_stale_and_stopped_service(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)):
-            (Path(tmp) / 'status.json').write_text(json.dumps({'timestamp': 100, 'level': 'critical'}))
+            (Path(tmp) / 'status.json').write_text(json.dumps({'timestamp': 100, 'level': 'critical', 'termination_allowed': True, 'discard_allowed': True}))
             with patch('chrome_native_host.time.time', return_value=105), patch.object(host, 'service_active', return_value=True):
-                self.assertEqual(host.status(), {'running': True, 'critical': True})
+                self.assertEqual(host.status(), {'running': True, 'critical': True, 'discard_allowed':True})
             with patch('chrome_native_host.time.time', return_value=125), patch.object(host, 'service_active', return_value=True):
                 self.assertFalse(host.status()['critical'])
             with patch('chrome_native_host.time.time', return_value=105), patch.object(host, 'service_active', return_value=False):
@@ -50,7 +50,7 @@ class NativeHostTests(unittest.TestCase):
 
     def test_claim_requires_critical_and_applies_global_cooldown(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(host, 'BASE', Path(tmp)), \
-             patch.object(host, 'status', return_value={'running': True, 'critical': True}), \
+             patch.object(host, 'status', return_value={'running': True, 'critical': True, 'discard_allowed':True}), \
              patch('chrome_native_host.time.time', return_value=1000):
             self.assertFalse(host.handle({'type': 'claim'})['granted'])
             self.assertFalse(host.handle({'type': 'claim'})['granted'])

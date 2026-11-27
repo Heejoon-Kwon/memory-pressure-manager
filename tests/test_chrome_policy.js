@@ -17,7 +17,7 @@ assert.equal(eligible({tab:{...tab,url:'chrome://settings/'},setting:{url:'chrom
   chrome.tabs.get = async () => tab;
   chrome.tabs.discard = async id => discarded.push(id);
   chrome.storage = {session: {get: async () => state, set: async obj => {state = {...state, ...obj};}}};
-  chrome.runtime.sendNativeMessage = async () => ({critical: true});
+  chrome.runtime.sendNativeMessage = async () => ({critical: true, discard_allowed:true});
   await applyCommands([{id: 1, token: 'session-a', action: 'discard', expires: Date.now()/1000+10}]);
   assert.deepEqual(discarded, [1]);
   await applyCommands([{id: 1, token: 'session-a', priority: 0}]);

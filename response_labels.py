@@ -1,5 +1,6 @@
 """Labels shared by the monitoring window without importing optional dependencies."""
 REASONS = {
+    'startup_grace': '새로 연 앱 · 60초 종료 유예',
     'unknown_jvm': '미식별 JVM · IDE 오인 종료 방지',
     'insufficient_gain': '32 MiB 미만 · 절약 효과가 작은 후보 제외',
     'protected_descendant': '보호된 앱의 상위 프로세스 · 종료 제외',

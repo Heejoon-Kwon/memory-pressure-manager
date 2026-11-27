@@ -44,3 +44,5 @@ RAG는 로컬 문서 검색이며 별도 LLM이나 벡터 DB를 상주시켜 RAM
 예방 제어는 가용 메모리와 감소 속도로 일찍 시작하며, 히스테리시스로 정상과 위험 상태 사이의 잦은 전환을 줄입니다.
 
 관리자 헬퍼의 커널 보호는 [oom_score_adj](https://docs.kernel.org/filesystems/proc.html)에 기반합니다. systemd-oomd의 범위 선택은 커널 OOM과 별개이며, [ManagedOOMPreference](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)의 소유자 신뢰 조건을 충족하는 전용 cgroup에만 제외 속성을 적용합니다. 화면에서 커널 PID 수와 OOM 데몬 범위 수를 각각 확인해야 합니다.
+
+예방 구간은 종료 없는 회수에만 사용합니다. 추세 예측이나 가용 메모리 20%라는 이유로 앱 종료를 허용하지 않습니다. 프로세스·웹 앱 종료는 별도의 부족 조건과 가용 메모리 8% 이하 게이트를 통과해야 하며, 압박이 해소되면 진행 중인 강제 종료 전환도 취소합니다. 새 앱과 새 셸이 열린 터미널은 60초간 종료 후보에서 제외합니다.

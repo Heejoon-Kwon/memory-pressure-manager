@@ -1,4 +1,5 @@
 """Linux telemetry, desktop application discovery and bounded responses."""
+import time
 import hashlib
 import os
 import re
@@ -274,6 +275,9 @@ class ResponseAgent:
             return 'chrome_tab_mode'
         if len(app.leaders) != 1:
             return 'ambiguous_process'
+        recent = app.processes if app.key == 'terminal' else app.leaders
+        if any(0 <= time.time()-proc.started < 60 for proc in recent):
+            return 'startup_grace'
         if app.key.startswith('process:') and app.name in ('java', 'java.bin'):
             return 'unknown_jvm'
         if app.rss < 32 * MIB:

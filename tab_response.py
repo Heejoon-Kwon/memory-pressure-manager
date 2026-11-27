@@ -77,9 +77,9 @@ class TabResponse:
                 return False
             # Live candidates and policy are checked below, never old tab IDs.
             return self.act(sample, level, now, source)
-        if level != 'critical' or now < self.next_action or self.declined:
+        if level not in ('warning','critical') or now < self.next_action or self.declined:
             return False
-        eligible = candidates(self.runtime)
+        eligible = [t for t in candidates(self.runtime) if not t.get('standalone') or (level == 'critical' and sample.available_percent <= min(getattr(self.owner,'threshold',8),8))]
         if not eligible:
             return False
         scenario = self.scenario(sample, eligible)
@@ -97,9 +97,9 @@ class TabResponse:
                            eligible[0]['priority']])
 
     def act(self, sample, level, now, source):
-        if level != 'critical':
+        if level not in ('warning','critical'):
             return False
-        eligible = candidates(self.runtime)
+        eligible = [t for t in candidates(self.runtime) if not t.get('standalone') or (level == 'critical' and sample.available_percent <= min(getattr(self.owner,'threshold',8),8))]
         if not eligible:
             return False
         tab = eligible[0]

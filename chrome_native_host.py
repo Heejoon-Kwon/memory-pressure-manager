@@ -28,9 +28,9 @@ def status():
         data = json.loads((BASE / 'status.json').read_text())
         age = time.time() - float(data['timestamp'])
         running = 0 <= age <= 20 and service_active()
-        return {'running': running, 'critical': running and data.get('level') == 'critical'}
+        return {'running': running, 'critical': running and data.get('termination_allowed', False), 'discard_allowed': running and data.get('discard_allowed', False)}
     except (OSError, ValueError, TypeError, KeyError):
-        return {'running': False, 'critical': False}
+        return {'running': False, 'critical': False, 'discard_allowed':False}
 
 
 def event(kind):

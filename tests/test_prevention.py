@@ -14,15 +14,15 @@ class PreventionTests(unittest.TestCase):
         policy=EarlyPressure({})
         def sample(free): return Sample(16*GIB,int(16*GIB*free/100),0,0,0,0)
         self.assertEqual(policy.classify(sample(24),'normal',0),'warning')
-        self.assertEqual(policy.classify(sample(20),'normal',2),'critical')
-        self.assertEqual(policy.classify(sample(24),'normal',4),'critical')
+        self.assertEqual(policy.classify(sample(20),'normal',2),'warning')
+        self.assertEqual(policy.classify(sample(24),'normal',4),'warning')
         self.assertEqual(policy.classify(sample(28),'normal',6),'normal')
 
     def test_forecasts_falling_available_memory(self):
         p=EarlyPressure({})
         for t,free in [(0,26),(2,25),(4,24)]:
             level=p.classify(Sample(16*GIB,int(16*GIB*free/100),0,0,0,0),'normal',t)
-        self.assertEqual(level,'critical')
+        self.assertEqual(level,'warning')
 
     def test_helper_refuses_foreign_uid_and_reused_pid(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,7 +55,7 @@ class PreventionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch('probe.RUNTIME',Path(tmp)), patch('probe.overrides',return_value={'slack':500}):
             owner=Probe({'watch':{'systemd_oom_preference':False},'openai':{'api_key':'test','monthly_budget_usd':1}},Path(tmp)/'db')
             owner.stop=Stop()
-            owner.watch.sample=Mock(return_value=Sample(16*GIB,3*GIB,0,0,0,0))
+            owner.watch.sample=Mock(return_value=Sample(16*GIB,GIB,0,0,0,0))
             owner.analysis.applications=Mock(return_value=group_apps([process(999999,'slack',rss=400)]))
             owner.advisor.advise=Mock(side_effect=AssertionError('API used on hot path'))
             owner.tab_response.tick=Mock(return_value=False)
@@ -64,6 +64,30 @@ class PreventionTests(unittest.TestCase):
                 with patch('probe.ResponseAgent.close') as close, patch('probe.notify'), patch('probe.time.monotonic',side_effect=[0,1,2,3]):
                     owner.run()
                     close.assert_called_once()
+                    owner.advisor.advise.assert_not_called()
+            finally:
+                owner.executor.shutdown()
+    def test_eighty_percent_usage_never_terminates_apps(self):
+        from probe import Probe
+        from test_probe import process
+        from agents import group_apps
+        from unittest.mock import Mock
+        class Stop:
+            n=0
+            def is_set(self): return self.n>=4
+            def wait(self,_): self.n+=1
+        with tempfile.TemporaryDirectory() as tmp, patch('probe.RUNTIME',Path(tmp)), patch('probe.overrides',return_value={'slack':500}):
+            owner=Probe({'watch':{'systemd_oom_preference':False},'openai':{'api_key':'test','monthly_budget_usd':1}},Path(tmp)/'db')
+            owner.stop=Stop()
+            owner.watch.sample=Mock(return_value=Sample(16*GIB,3*GIB,0,0,0,0))
+            owner.analysis.applications=Mock(return_value=group_apps([process(999999,'slack',rss=400)]))
+            owner.advisor.advise=Mock(side_effect=AssertionError('API used on hot path'))
+            owner.tab_response.tick=Mock(return_value=False)
+            owner.reclaim_response.tick=Mock(return_value=False)
+            try:
+                with patch('probe.ResponseAgent.close') as close, patch('probe.notify'), patch('probe.time.monotonic',side_effect=[0,1,2,3]):
+                    owner.run()
+                    close.assert_not_called()
                     owner.advisor.advise.assert_not_called()
             finally:
                 owner.executor.shutdown()

@@ -62,6 +62,12 @@ class ProbeTests(unittest.TestCase):
             ResponseAgent.close(app, {'files':500}, force=True)
             sent.assert_called_once_with(99, signal.SIGKILL)
 
+    def test_new_terminal_shell_gets_startup_grace(self):
+        apps = group_apps([process(10,'gnome-terminal-server',rss=80), process(999,'bash',rss=20,parent=10)])
+        with patch('agents.time.time',return_value=1000):
+            self.assertEqual(ResponseAgent.candidates(apps, {'terminal':500}), [])
+            self.assertEqual(ResponseAgent.blocked_reason(apps[0],{'terminal':500}), 'startup_grace')
+
     def test_priority_migration_and_new_order(self):
         import json
         from priorities import read_priorities

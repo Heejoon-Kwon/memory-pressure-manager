@@ -135,7 +135,7 @@ async function syncWindow() {
         discarded: !!tab.discarded, supported: typeof tab.url === 'string' && /^https?:\/\//i.test(tab.url)});
     }
     await chrome.storage.session.set({tabIdentities: identities});
-    if (bridge) bridge.postMessage({type: 'sync', build: '2026.11.27.1', profile, tabs: entries});
+    if (bridge) bridge.postMessage({type: 'sync', build: '2026.11.27.2', profile, tabs: entries});
   } finally { syncing = false; }
 }
 async function applyCommands(commands) {
@@ -157,7 +157,7 @@ async function applyCommands(commands) {
         const freshTab = await chrome.tabs.get(cmd.id);
         Object.assign(freshTab, await webAppState(freshTab));
         const freshSettings = await settings();
-        if (!state.critical || freshTab.url !== identity.url || !eligible({tab: freshTab, setting: freshSettings[cmd.id]})) continue;
+        if (!(cmd.action === 'close_web_app' ? state.critical : state.discard_allowed) || freshTab.url !== identity.url || !eligible({tab: freshTab, setting: freshSettings[cmd.id]})) continue;
         if (cmd.action === 'close_web_app') {
           if (!freshTab.standalone || freshTab.windowFocused) continue;
           await chrome.tabs.remove(cmd.id);
