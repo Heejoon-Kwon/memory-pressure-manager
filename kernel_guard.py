@@ -90,6 +90,12 @@ def main():
                 wanted=set(applied)
             except (OSError,ValueError,KeyError,StopIteration): wanted=set()
             for key,old in list(applied.items()):
+                try:
+                    ids,actual=identity(Path('/proc')/str(key[0]))
+                    if actual!=key[1] or not all(x==args.uid for x in ids):
+                        applied.pop(key,None); wanted.discard(key); continue
+                except (OSError,ValueError,StopIteration):
+                    applied.pop(key,None); wanted.discard(key); continue
                 if key not in wanted:
                     try:
                         if int((Path('/proc')/str(key[0])/'oom_score_adj').read_text()) == -1000:
